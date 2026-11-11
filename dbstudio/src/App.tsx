@@ -5,10 +5,13 @@ import { ConnectionScreen } from './components/ConnectionScreen'
 import { Sidebar, TableView } from './components/Sidebar'
 import { TableDesigner } from './components/TableDesigner'
 import { QueryTab } from './components/QueryTab'
+import { Dashboard } from './components/Dashboard'
+import { Workspace, WorkspacesModal, WsTab } from './components/Workspaces'
 import { TableTab } from './components/TableTab'
 import { SettingsModal, SettingsSection, ShortcutsHelp } from './components/SettingsModal'
 import { CommandPalette, Command } from './components/CommandPalette'
 import { ServerTools } from './components/ServerTools'
+import { ImportDialog } from './components/ImportDialog'
 import { ErDiagram } from './components/ErDiagram'
 import { SchemaCompare } from './components/SchemaCompare'
 import { DataCompare } from './components/DataCompare'
@@ -16,7 +19,7 @@ import { Notebook } from './components/Notebook'
 import { QueryBuilder } from './components/QueryBuilder'
 import { FindInDb } from './components/FindInDb'
 import { Schedules } from './components/Schedules'
-import { IconBook, IconBuilder, IconCode, IconCompare, IconDiagram, IconGear, IconMoon, IconPlus, IconSearch, IconServer, IconSidebar, IconKeyboard, IconClock, IconDatabase, IconSun, IconTable, IconX } from './components/Icons'
+import { IconBook, IconBuilder, IconCode, IconCompare, IconDiagram, IconGear, IconMoon, IconPlus, IconSearch, IconServer, IconSidebar, IconKeyboard, IconClock, IconDatabase, IconSun, IconTable, IconX, IconUsers, IconJobs, IconBackup, IconActivity, IconRows, IconUpload, IconChart, IconLayers } from './components/Icons'
 import { driverFor, queryLanguage } from '../shared/drivers'
 import { applySettings, ConnContext, readSettings, resolvedTheme, shortcutFor, useSettings, writeSettings } from './settings'
 import { ACTIONS, EDITOR_ACTIONS, matches, ShortcutAction } from './shortcuts'
@@ -36,6 +39,7 @@ type Tab =
   | { key: string; kind: 'builder'; title: string }
   | { key: string; kind: 'search'; title: string }
   | { key: string; kind: 'schedules'; title: string }
+  | { key: string; kind: 'dashboard'; title: string }
 
 // Send uncaught UI errors to the local log file
 window.addEventListener('error', (e) => { window.db?.logError(`${e.message}\n${e.error?.stack ?? ''}`).catch(() => {}) })
@@ -78,6 +82,18 @@ export function App() {
   const [pinned, setPinned] = useState<Set<string>>(new Set())
   // Tab shown on the right of the active one (split view)
   const [side, setSide] = useState('')
+  const [, setDirtyTick] = useState(0)
+  const [importNew, setImportNew] = useState(false)
+  const [wsOpen, setWsOpen] = useState(false)
+  const dirtyRef = useRef<Record<string, boolean>>({})
+  const savers = useRef<Record<string, () => Promise<boolean>>>({})
+  const [confirmClose, setConfirmClose] = useState<{ keys: string[]; unsaved: string[]; includePinned: boolean; quit?: boolean } | null>(null)
+  // Closing the window: ask about unsaved query tabs first
+  useEffect(() => window.db.onCloseRequest?.(() => {
+    const unsaved = Object.keys(dirtyRef.current).filter((k) => dirtyRef.current[k])
+    if (!unsaved.length) window.db.confirmClose()
+    else setConfirmClose({ keys: unsaved, unsaved, includePinned: true, quit: true })
+  }), [])
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   // Current text of each query tab, saved so tabs come back after a restart
   const texts = useRef<Record<string, string>>({})
@@ -185,8 +201,18 @@ export function App() {
     setTabs((t) => (t.some((x) => x.key === tab.key) ? t : [...t, tab]))
     setActive(tab.key)
   }
-  const closeTab = (key: string, force = false) => {
+  // Unsaved query tabs and how to save each one (filled in by the tabs)
+  /** Close tabs, first asking about unsaved ones unless forced */
+  const requestClose = (keys: string[], o: { force?: boolean; includePinned?: boolean } = {}) => {
+    const list = keys.filter((k) => o.includePinned || !pinned.has(k))
+    const unsaved = o.force ? [] : list.filter((k) => dirtyRef.current[k])
+    if (unsaved.length) setConfirmClose({ keys: list, unsaved, includePinned: !!o.includePinned })
+    else list.forEach((k) => reallyClose(k, true))
+  }
+  const closeTab = (key: string, force = false) => requestClose([key], { includePinned: force })
+  const reallyClose = (key: string, force = false) => {
     if (pinned.has(key) && !force) return
+    delete dirtyRef.current[key]; delete savers.current[key]
     if (side === key) setSide('')
     setPinned((p) => { if (!p.has(key)) return p; const n = new Set(p); n.delete(key); return n })
     const closing = tabsRef.current.find((x) => x.key === key)
@@ -245,6 +271,36 @@ export function App() {
   const openBuilder = () => { tabCounter += 1; openTab({ key: `qb${tabCounter}`, kind: 'builder', title: 'Query builder' }) }
   const openSearch = () => openTab({ key: 'search', kind: 'search', title: 'Find in database' })
   const openSchedules = () => openTab({ key: 'schedules', kind: 'schedules', title: 'Schedules' })
+  const openDashboard = () => openTab({ key: 'dashboard', kind: 'dashboard', title: 'Dashboard' })
+  /** Open tabs as plain data (query text included), for a workspace */
+  const snapshotTabs = () => {
+    const list = tabsRef.current
+    return {
+      tabs: list.map((t) => { const { key, nonce, ...rest } = t as Tab & { nonce?: number }; void nonce; return (t.kind === 'query' ? { ...rest, text: texts.current[key] ?? (t as { text?: string }).text ?? '' } : rest) as WsTab }),
+      active: Math.max(0, list.findIndex((t) => t.key === active))
+    }
+  }
+  const restoreWorkspace = (w: Workspace, replace: boolean) => {
+    if (replace && tabsRef.current.some((t) => dirtyRef.current[t.key])) {
+      setStatus((st) => ({ ...st, [active]: 'Save or close the unsaved tabs first (or use Add)' })); return
+    }
+    const fresh: Tab[] = w.tabs.map((t) => {
+      let key: string
+      if (t.kind === 'query') { tabCounter += 1; key = `q${tabCounter}`; texts.current[key] = String(t.text ?? '') }
+      else if (t.kind === 'notebook') { tabCounter += 1; key = `nb${tabCounter}` }
+      else if (t.kind === 'builder') { tabCounter += 1; key = `qb${tabCounter}` }
+      else if (t.kind === 'newtable') { tabCounter += 1; key = `n${tabCounter}` }
+      else if (t.kind === 'table') { const ti = t.table as TableInfo; key = `t:${ti.schema ?? ''}.${ti.name}` }
+      else key = t.kind === 'tools' ? 'tools' : t.kind
+      return { ...t, key } as Tab
+    })
+    setTabs((cur) => {
+      const base = replace ? cur.filter((t) => pinned.has(t.key)) : cur
+      return [...base, ...fresh.filter((f) => !base.some((b) => b.key === f.key))]
+    })
+    setActive(fresh[w.active]?.key ?? fresh[0]?.key ?? '')
+    setStatus((st) => ({ ...st, [fresh[0]?.key ?? active]: `Opened workspace “${w.name}”` }))
+  }
   const renameTab = (key: string) => (title: string) => setTabs((l) => l.map((x) => (x.key === key ? { ...x, title } : x)))
   const cycleTab = (dir: 1 | -1) => {
     if (!tabs.length) return
@@ -297,11 +353,15 @@ export function App() {
     ...(closedTabs.current.length ? [{ id: 'reopen', label: `Reopen closed tab: ${closedTabs.current[closedTabs.current.length - 1].title}`, hint: hint('reopenTab'), run: actionMap.reopenTab! }] : []),
     ...(sqlLike ? [
       { id: 'notebook', label: 'New notebook', hint: hint('newNotebook'), run: openNotebook },
+      { id: 'closeall', label: 'Close all tabs', run: () => requestClose(tabsRef.current.map((t) => t.key)) },
+      { id: 'forceclose', label: 'Force close all tabs (discard unsaved changes)', run: () => requestClose(tabsRef.current.map((t) => t.key), { force: true, includePinned: true }) },
       { id: 'builder', label: 'Visual query builder', hint: hint('queryBuilder'), run: openBuilder },
       { id: 'datacompare', label: 'Data compare (rows between two tables)', hint: hint('dataCompare'), run: openDataCompare },
       { id: 'search', label: 'Find in database (search every table)', hint: hint('findInDb'), run: openSearch }
     ] : []),
-    ...(sqlLike && session.canEdit ? [{ id: 'new-table', label: 'New table', run: newTable }] : []),
+    ...(sqlLike && session.canEdit ? [{ id: 'new-table', label: 'New table', run: newTable }, { id: 'import-new', label: 'Import a file into a new table (CSV, Excel, JSON)', run: () => setImportNew(true) }] : []),
+    { id: 'dashboard', label: 'Dashboard (pinned charts)', run: openDashboard },
+    { id: 'workspaces', label: 'Workspaces: save or open a set of tabs', run: () => setWsOpen(true) },
     { id: 'schedules', label: 'Scheduled queries and exports', hint: hint('schedules'), run: openSchedules },
     { id: 'settings', label: 'Settings', hint: hint('settings'), run: () => openSettings() },
     { id: 'shortcuts', label: 'Keyboard shortcuts (list)', hint: hint('shortcutsHelp'), run: () => setHelpOpen(true) },
@@ -350,6 +410,8 @@ export function App() {
                 {item('Data compare', <IconCompare />, kind === 'datacompare' || kind === 'compare', openDataCompare, 'dataCompare', sqlLike)}
                 {item('ER diagram', <IconDiagram />, kind === 'er', openEr, 'erDiagram', sqlLike)}
                 {item('Scheduled queries', <IconClock />, kind === 'schedules', openSchedules, 'schedules')}
+                {item('Dashboard', <IconChart />, kind === 'dashboard', openDashboard)}
+                {item('Workspaces', <IconLayers />, wsOpen, () => setWsOpen(true))}
                 {item('Server tools', <IconServer />, kind === 'tools', () => openTools(sqlLike ? 'activity' : 'backup'))}
                 <div className="rail-spacer" />
                 {item('Keyboard shortcuts', <IconKeyboard />, helpOpen, () => setHelpOpen(true), 'shortcutsHelp')}
@@ -390,6 +452,7 @@ export function App() {
                     {tabIcon(t)}
                     {!pinned.has(t.key) && <span className="tab-title">{t.title}</span>}
                     {running.has(t.key) && <span className="tab-spinner" title="Running" />}
+                    {dirtyRef.current[t.key] && <span className="tab-dirty" title="Unsaved changes">●</span>}
                     {!pinned.has(t.key) && <button className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.key) }}><IconX width={12} height={12} /></button>}
                   </div>
                 ))}
@@ -406,13 +469,16 @@ export function App() {
                       {sqlLike && <button onClick={openNotebook}><IconBook width={14} height={14} /> New notebook</button>}
                       {sqlLike && <button onClick={openBuilder}><IconBuilder width={14} height={14} /> Visual query builder</button>}
                       {sqlLike && <button onClick={openCompare}><IconCompare width={14} height={14} /> Schema compare</button>}
-                      {sqlLike && <button onClick={openDataCompare}><IconCompare width={14} height={14} /> Data compare</button>}
+                      {sqlLike && <button onClick={openDataCompare}><IconRows width={14} height={14} /> Data compare</button>}
                       {sqlLike && <button onClick={openSearch}><IconSearch width={14} height={14} /> Find in database</button>}
-                      <button onClick={openSchedules}>Scheduled queries</button>
-                      {sqlLike && <button onClick={() => openTools('activity')}><IconServer width={14} height={14} /> Activity monitor</button>}
-                      {sqlLike && <button onClick={() => openTools('users')}>Users and roles</button>}
-                      {engine === 'mssql' && <button onClick={() => openTools('jobs')}>SQL Agent jobs</button>}
-                      <button onClick={() => openTools('backup')}>Backup and restore</button>
+                      {sqlLike && session.canEdit && <button onClick={() => setImportNew(true)}><IconUpload width={14} height={14} /> Import file to new table</button>}
+                      <button onClick={openSchedules}><IconClock width={14} height={14} /> Scheduled queries</button>
+                      <button onClick={openDashboard}><IconChart width={14} height={14} /> Dashboard</button>
+                      <button onClick={() => setWsOpen(true)}><IconLayers width={14} height={14} /> Workspaces</button>
+                      {sqlLike && <button onClick={() => openTools('activity')}><IconActivity width={14} height={14} /> Activity monitor</button>}
+                      {sqlLike && <button onClick={() => openTools('users')}><IconUsers width={14} height={14} /> Users and roles</button>}
+                      {engine === 'mssql' && <button onClick={() => openTools('jobs')}><IconJobs width={14} height={14} /> SQL Agent jobs</button>}
+                      <button onClick={() => openTools('backup')}><IconBackup width={14} height={14} /> Backup and restore</button>
                     </div>
                   </>
                 )}
@@ -434,6 +500,7 @@ export function App() {
                   <QueryTab connId={session.id} database={cfg.database} dark={dark} language={queryLanguage(cfg.kind)} dialect={engine}
                     title={t.title} initialText={texts.current[t.key] ?? t.text} onStatus={statusFor(t.key)} onRunningChange={runningFor(t.key)}
                     onSchemaChanged={bumpSchema} onTextChange={textFor(t.key)} filePath={t.file}
+                    onDirty={(d) => { dirtyRef.current[t.key] = d; setDirtyTick((n) => n + 1) }} registerSave={(fn) => { savers.current[t.key] = fn }}
                     onFile={(p) => setTabs((ts) => { const n = ts.map((x) => (x.key === t.key ? { ...x, title: p.split(/[\\/]/).pop() || x.title, file: p } : x)); persistTabs(n); return n })} />
                 )}
                 {t.kind === 'table' && (
@@ -453,11 +520,44 @@ export function App() {
                 {t.kind === 'notebook' && <Notebook connId={session.id} dark={dark} title={t.title} onTitle={renameTab(t.key)} onStatus={statusFor(t.key)} onRunningChange={runningFor(t.key)} />}
                 {t.kind === 'search' && <FindInDb onOpenTable={(tb, v, w) => openTable(tb, v as TableView, w)} onStatus={statusFor(t.key)} />}
                 {t.kind === 'schedules' && <Schedules dark={dark} onStatus={statusFor(t.key)} />}
+                {t.kind === 'dashboard' && <Dashboard onOpenQuery={openQuery} onStatus={statusFor(t.key)} />}
                 {t.kind === 'builder' && <QueryBuilder dark={dark} onOpenQuery={openQuery} onStatus={statusFor(t.key)} />}
               </div>
             ))}
             </div>
           </main>
+          {importNew && <ImportDialog onClose={() => setImportNew(false)} onDone={(n, t) => { bumpSchema(); openTable(t); setStatus((st) => ({ ...st, [active]: `Imported ${n.toLocaleString()} rows into ${t.name}` })) }} />}
+          {confirmClose && (() => {
+            const c = confirmClose
+            const titleOf = (k: string) => tabs.find((t) => t.key === k)?.title ?? k
+            const finish = (keys: string[]) => { setConfirmClose(null); if (c.quit) { window.db.confirmClose(); return } keys.forEach((k) => reallyClose(k, true)) }
+            const saveAll = async () => {
+              for (const k of c.unsaved) {
+                const ok = await savers.current[k]?.()
+                if (!ok) { setConfirmClose(null); setActive(k); return } // cancelled: keep the rest open
+              }
+              finish(c.keys)
+            }
+            return (
+              <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setConfirmClose(null) }}
+                onKeyDown={(e) => { if (e.key === 'Escape') setConfirmClose(null) }}>
+                <div className="modal confirm-close" role="dialog" aria-label="Unsaved changes">
+                  <div className="modal-head"><strong>{c.unsaved.length === 1 ? `Save changes to “${titleOf(c.unsaved[0])}”?` : `Save changes to ${c.unsaved.length} tabs?`}</strong></div>
+                  <div className="modal-body">
+                    <p>{c.unsaved.length === 1 ? 'This query has changes that are not saved to a file.' : 'These queries have changes that are not saved to a file:'}</p>
+                    {c.unsaved.length > 1 && <ul className="unsaved-list">{c.unsaved.map((k) => <li key={k}>{titleOf(k)}</li>)}</ul>}
+                    <p className="muted small-text">{c.quit ? "Qubase is closing. If you don't save, these changes are lost." : <>If you don't save, the changes are lost (you can still bring the last closed tab back with {shortcutFor(settings, 'reopenTab') || 'Reopen closed tab'}).</>}</p>
+                  </div>
+                  <div className="modal-foot">
+                    <button className="btn" onClick={() => setConfirmClose(null)}>Cancel</button>
+                    <span className="spacer" />
+                    <button className="btn danger" onClick={() => finish(c.keys)}>{c.quit ? "Don't save, close Qubase" : "Don't save"}</button>
+                    <button className="btn btn-primary" autoFocus onClick={saveAll}>{c.unsaved.length === 1 ? 'Save' : 'Save all'}</button>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
           {tabMenu && (() => {
             const k = tabMenu.key
             const close = () => setTabMenu(null)
@@ -469,8 +569,12 @@ export function App() {
                   {k !== active && <button onClick={() => setSide(k)}>Open to the side</button>}
                   {k === active && tabs.length > 1 && <button onClick={() => setSide(tabs.find((t) => t.key !== k)!.key)}>Split with another tab</button>}
                   {side && <button onClick={() => setSide('')}>Close split</button>}
-                  <button onClick={() => tabs.filter((t) => t.key !== k && !pinned.has(t.key)).forEach((t) => closeTab(t.key))}>Close other tabs</button>
                   {!pinned.has(k) && <button onClick={() => closeTab(k)}>Close</button>}
+                  <button onClick={() => requestClose(tabs.filter((t) => t.key !== k).map((t) => t.key))}>Close other tabs</button>
+                  <button onClick={() => requestClose(tabs.filter((t) => !dirtyRef.current[t.key]).map((t) => t.key))}>Close saved tabs</button>
+                  <button onClick={() => requestClose(tabs.map((t) => t.key))}>Close all tabs</button>
+                  <div className="menu-sep" />
+                  <button className="danger-text" onClick={() => requestClose(tabs.map((t) => t.key), { force: true, includePinned: true })}>Force close all (discard unsaved changes)</button>
                 </div>
               </>
             )
@@ -487,6 +591,7 @@ export function App() {
         </footer>
         {settingsOpen && <SettingsModal section={settingsAt} onClose={() => setSettingsOpen(false)} onSaved={() => {}} />}
         {helpOpen && <ShortcutsHelp settings={settings} onClose={() => setHelpOpen(false)} onEdit={() => { setHelpOpen(false); openSettings('shortcuts') }} />}
+        {wsOpen && <WorkspacesModal connId={session.conn.id} current={snapshotTabs} onOpen={restoreWorkspace} onClose={() => setWsOpen(false)} />}
         {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       </div>
     </ConnContext.Provider>

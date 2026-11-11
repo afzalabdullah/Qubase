@@ -47,6 +47,19 @@ function createWindow() {
       nodeIntegration: false
     }
   })
+  // Closing the window first asks the page, which checks for unsaved query tabs.
+  // If the page has crashed or doesn't answer within 4 s, the window closes anyway.
+  let closeOk = false
+  win.on('close', (e) => {
+    if (closeOk || win.webContents.isCrashed() || win.webContents.isLoading()) return
+    e.preventDefault()
+    win.webContents.send('app:closeRequest')
+    const t = setTimeout(() => { if (!answered) { closeOk = true; win.close() } }, 4000)
+    let answered = false
+    const busy = () => { answered = true; clearTimeout(t) }
+    ipcMain.once('app:closeSeen', busy)
+  })
+  ipcMain.on('app:closeOk', (e) => { if (e.sender === win.webContents) { closeOk = true; win.close() } })
   // Links (e.g. in notebook notes) open in the system browser, never in the app
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url)
@@ -297,6 +310,25 @@ ipcMain.handle('file:saveText', async (e, content: string, o: { name: string; fi
   }
   await fs.promises.writeFile(file, content, 'utf8')
   return file
+})
+ipcMain.handle('file:saveBinary', async (e, b64: string, o: { name: string; filter: string; ext: string }) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender)!, { defaultPath: `${o.name}.${o.ext}`, filters: [{ name: o.filter, extensions: [o.ext] }] })
+  if (r.canceled || !r.filePath) return null
+  await fs.promises.writeFile(r.filePath, Buffer.from(b64, 'base64'))
+  return r.filePath
+})
+ipcMain.handle('file:svgPdf', async (e, svg: string, o: { name: string; width: number; height: number }) => {
+  const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender)!, { defaultPath: `${o.name}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+  if (r.canceled || !r.filePath) return null
+  // Draw the SVG in a hidden window (no scripts, no network) and print it to one page of exactly its size
+  const w = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true } })
+  try {
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${o.width}px ${o.height}px;margin:0}html,body{margin:0}</style></head><body>${svg}</body></html>`
+    await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+    const pdf = await w.webContents.printToPDF({ printBackground: true, margins: { marginType: 'none' }, pageSize: { width: o.width / 96, height: o.height / 96 }, preferCSSPageSize: true })
+    await fs.promises.writeFile(r.filePath, pdf)
+    return r.filePath
+  } finally { w.destroy() }
 })
 ipcMain.handle('file:openText', async (e, o: { filter: string; ext: string }) => {
   const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, { properties: ['openFile'], filters: [{ name: o.filter, extensions: [o.ext] }, { name: 'All files', extensions: ['*'] }] })

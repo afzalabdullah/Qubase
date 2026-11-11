@@ -267,8 +267,15 @@ export interface DbApi {
   deleteSaved(id: string): Promise<SavedConnection[]>
   /** 'db' shows database files first; 'any' is any file (keys, certificates); 'data' is CSV/Excel/JSON */
   pickFile(kind?: 'db' | 'any' | 'data'): Promise<string | null>
+  /** Called when the user closes the window; reply with confirmClose() to let it close */
+  onCloseRequest(cb: () => void): () => void
+  confirmClose(): void
   /** Save text to a file the user picks; returns the path, or null if cancelled. Pass path to overwrite without asking. */
   saveTextFile(content: string, opts: { name: string; filter: string; ext: string; path?: string }): Promise<string | null>
+  /** Save bytes (base64) to a file the user picks; returns the path, or null if cancelled. */
+  saveBinaryFile(base64: string, opts: { name: string; filter: string; ext: string }): Promise<string | null>
+  /** Render an SVG document to a one-page PDF of the given size (CSS pixels) and save it. */
+  saveSvgAsPdf(svg: string, opts: { name: string; width: number; height: number }): Promise<string | null>
   listSchedules(): Promise<Schedule[]>
   saveSchedule(s: Schedule): Promise<Schedule[]>
   deleteSchedule(id: string): Promise<Schedule[]>

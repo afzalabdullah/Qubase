@@ -37,6 +37,24 @@ export interface Settings {
   teamFolder: string
   /** Update server for auto-update ('' = off) */
   updateUrl: string
+  /** Own accent colour (#rrggbb) used when accent is 'custom' */
+  accentCustom: string
+  /** Activity bar (far-left strip) colour; '' = theme default */
+  railColor: string
+  /** Sidebar / table list colour; '' = theme default */
+  sidebarColor: string
+  /** Status bar colour: '' = charcoal, 'accent' = accent colour, or #rrggbb */
+  statusColor: string
+  /** Interface font (see UI_FONTS) */
+  uiFont: string
+  /** Editor and grid font (see MONO_FONTS) */
+  monoFont: string
+  /** Interface text size in px */
+  uiSize: number
+  /** Corner roundness */
+  radius: 'sharp' | 'normal' | 'round'
+  /** Spacing of lists, tabs and grid rows */
+  density: 'compact' | 'normal' | 'comfortable'
   /** Changed keyboard shortcuts (missing ones use the default) */
   shortcuts: Partial<Record<ShortcutAction, string>>
 }
@@ -70,7 +88,67 @@ export const DEFAULT_SETTINGS: Settings = {
   queryParams: true,
   teamFolder: '',
   updateUrl: '',
+  accentCustom: '#f2620f',
+  railColor: '',
+  sidebarColor: '',
+  statusColor: '',
+  uiFont: 'segoe',
+  monoFont: 'cascadia',
+  uiSize: 13,
+  radius: 'normal',
+  density: 'normal',
   shortcuts: {}
+}
+
+/** Interface fonts: [label, CSS stack]. Fonts not installed fall back to the next in the stack. */
+export const UI_FONTS: Record<string, [string, string]> = {
+  segoe: ['Segoe UI (Windows)', "'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif"],
+  inter: ['Inter', "Inter, 'Segoe UI', system-ui, sans-serif"],
+  roboto: ['Roboto', "Roboto, 'Segoe UI', system-ui, sans-serif"],
+  opensans: ['Open Sans', "'Open Sans', 'Segoe UI', system-ui, sans-serif"],
+  arial: ['Arial', "Arial, Helvetica, sans-serif"],
+  verdana: ['Verdana (wide, easy to read)', "Verdana, Geneva, sans-serif"],
+  tahoma: ['Tahoma (compact)', "Tahoma, 'Segoe UI', sans-serif"],
+  georgia: ['Georgia (serif)', "Georgia, 'Times New Roman', serif"],
+  mono: ['Monospace everywhere', "'Cascadia Code', Consolas, monospace"]
+}
+export const MONO_FONTS: Record<string, [string, string]> = {
+  cascadia: ['Cascadia Code', "'Cascadia Code', 'Cascadia Mono', Consolas, monospace"],
+  consolas: ['Consolas', "Consolas, 'Courier New', monospace"],
+  jetbrains: ['JetBrains Mono', "'JetBrains Mono', 'Cascadia Code', Consolas, monospace"],
+  fira: ['Fira Code', "'Fira Code', 'Cascadia Code', Consolas, monospace"],
+  sourcecode: ['Source Code Pro', "'Source Code Pro', Consolas, monospace"],
+  courier: ['Courier New', "'Courier New', Courier, monospace"],
+  lucida: ['Lucida Console', "'Lucida Console', Consolas, monospace"]
+}
+
+/** Ready-made looks; picking one fills in the colour settings */
+export const THEME_PRESETS: { id: string; label: string; s: Partial<Settings> }[] = [
+  { id: 'qubase', label: 'Qubase', s: { accent: 'orange', railColor: '', sidebarColor: '', statusColor: '' } },
+  { id: 'ocean', label: 'Ocean', s: { accent: 'custom', accentCustom: '#0e7cc9', railColor: '#0b2440', sidebarColor: '', statusColor: '#0b2440' } },
+  { id: 'forest', label: 'Forest', s: { accent: 'custom', accentCustom: '#2f9e44', railColor: '#14281c', sidebarColor: '', statusColor: '#14281c' } },
+  { id: 'grape', label: 'Grape', s: { accent: 'custom', accentCustom: '#7c3aed', railColor: '#24163f', sidebarColor: '', statusColor: 'accent' } },
+  { id: 'rose', label: 'Rose', s: { accent: 'custom', accentCustom: '#e11d63', railColor: '#3a1424', sidebarColor: '', statusColor: '#3a1424' } },
+  { id: 'midnight', label: 'Midnight', s: { theme: 'dark', accent: 'custom', accentCustom: '#38bdf8', railColor: '#0a0f1a', sidebarColor: '#0f1626', statusColor: '#0a0f1a' } },
+  { id: 'paper', label: 'Paper', s: { theme: 'light', accent: 'custom', accentCustom: '#3b5bdb', railColor: '#eef0f3', sidebarColor: '#fafafa', statusColor: '#eef0f3' } },
+  { id: 'mono', label: 'Graphite', s: { accent: 'custom', accentCustom: '#4b5563', railColor: '#1f2328', sidebarColor: '', statusColor: '#1f2328' } }
+]
+
+/** Perceived brightness 0–255 of #rrggbb */
+export function brightness(hex: string) {
+  const h = hex.replace('#', '')
+  if (h.length < 6) return 128
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16))
+  return (r * 299 + g * 587 + b * 114) / 1000
+}
+/** Accent colour in use for a theme */
+export function accentOf(s: Settings, theme: 'light' | 'dark') {
+  if (s.accent === 'custom' && /^#[0-9a-f]{6}$/i.test(s.accentCustom)) {
+    // In dark mode lift very dark custom accents so they stay visible
+    return theme === 'dark' && brightness(s.accentCustom) < 90 ? `color-mix(in srgb, ${s.accentCustom} 65%, white)` : s.accentCustom
+  }
+  const a = ACCENTS[s.accent] ?? ACCENTS.orange
+  return theme === 'dark' ? a.dark : a.light
 }
 
 /** The shortcut for an action, after the user's changes */
@@ -111,10 +189,33 @@ export function applySettings(s: Settings) {
   root.dataset.theme = theme
   root.style.setProperty('--editor-font', `${s.fontSize}px`)
   const a = ACCENTS[s.accent] ?? ACCENTS.orange
-  const c = theme === 'dark' ? a.dark : a.light
+  const c = accentOf(s, theme)
   root.style.setProperty('--accent', c)
-  root.style.setProperty('--accent-ink', theme === 'dark' && s.accent !== 'honey' ? '#14110e' : a.ink)
+  const ink = s.accent === 'custom' ? (brightness(s.accentCustom) > 170 ? '#1a1a1a' : '#ffffff') : theme === 'dark' && s.accent !== 'honey' ? '#14110e' : a.ink
+  root.style.setProperty('--accent-ink', ink)
   root.style.setProperty('--accent-soft', `color-mix(in srgb, ${c} 16%, transparent)`)
+  const hex = (v: string) => /^#[0-9a-f]{6}$/i.test(v)
+  const setOrClear = (name: string, v: string | false) => { if (v) root.style.setProperty(name, v); else root.style.removeProperty(name) }
+  // Activity bar: own colour, with light or dark icons to match
+  setOrClear('--rail-bg', hex(s.railColor) && s.railColor)
+  const railLight = hex(s.railColor) && brightness(s.railColor) > 150
+  setOrClear('--rail-ink', railLight && '#4b5160'); setOrClear('--rail-ink-on', railLight && '#111317')
+  setOrClear('--rail-hover', railLight && 'rgba(0, 0, 0, 0.07)')
+  // Sidebar: own colour; its text switches to light or dark by brightness
+  setOrClear('--sidebar', hex(s.sidebarColor) && s.sidebarColor)
+  if (hex(s.sidebarColor)) root.dataset.sidebar = brightness(s.sidebarColor) > 150 ? 'light' : 'dark'
+  else delete root.dataset.sidebar
+  // Status bar
+  const sb = s.statusColor === 'accent' ? c : hex(s.statusColor) ? s.statusColor : ''
+  setOrClear('--status-bg', sb)
+  setOrClear('--status-ink', sb && (s.statusColor === 'accent' ? ink : brightness(s.statusColor) > 150 ? '#1a1a1a' : '#f1f2f4'))
+  // Fonts, size, corners, spacing
+  root.style.setProperty('--ui-font', (UI_FONTS[s.uiFont] ?? UI_FONTS.segoe)[1])
+  root.style.setProperty('--mono', (MONO_FONTS[s.monoFont] ?? MONO_FONTS.cascadia)[1])
+  root.style.setProperty('--ui-size', `${s.uiSize || 13}px`)
+  root.style.setProperty('--radius', s.radius === 'sharp' ? '3px' : s.radius === 'round' ? '12px' : '8px')
+  root.dataset.radius = s.radius
+  root.dataset.density = s.density
 }
 
 export function writeSettings(s: Settings) {

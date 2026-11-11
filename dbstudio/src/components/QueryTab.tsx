@@ -7,6 +7,10 @@ import { StateEffect, StateField } from '@codemirror/state'
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import type { ExplainResult, QueryResult, TableInfo } from '../../shared/types'
 import { ResultView } from './ResultView'
+import { EditableResult } from './EditableResult'
+import { addTile, PinContext } from '../dashboard'
+import { joinSource, valueSource } from '../smartComplete'
+import type { ForeignKeyInfo } from '../../shared/types'
 import { PlanView } from './PlanView'
 import { AiPanel } from './AiPanel'
 import { IconFormat, IconHistory, IconPlan, IconPlay, IconSpark, IconStar, IconStop, IconTrash } from './Icons'
@@ -51,10 +55,16 @@ interface Props {
   filePath?: string
   /** Called after the tab is saved to or opened from a file */
   onFile?: (path: string) => void
+  /** Reports whether the tab has changes that are not saved to a file */
+  onDirty?: (dirty: boolean) => void
+  /** Hands the app a function that saves this tab (asks for a file name if needed); resolves true when saved */
+  registerSave?: (fn: () => Promise<boolean>) => void
 }
 
 interface Run {
   results: QueryResult[]
+  /** The code that produced the results */
+  sql?: string
   messages: { time: string; text: string; error?: boolean }[]
 }
 
@@ -120,7 +130,7 @@ function statementAt(doc: string, pos: number): string {
   return doc
 }
 
-export function QueryTab({ connId, database, dialect, dark, language, title, onStatus, onRunningChange, initialText, onSchemaChanged, onTextChange, filePath, onFile }: Props) {
+export function QueryTab({ connId, database, dialect, dark, language, title, onStatus, onRunningChange, initialText, onSchemaChanged, onTextChange, filePath, onFile, onDirty, registerSave }: Props) {
   const { conn } = useConn()
   const settings = useSettings()
   const [text, setText] = useState(initialText ?? STARTER[language])
@@ -128,14 +138,18 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
   const [savedText, setSavedText] = useState(filePath ? (initialText ?? '') : null as string | null)
   const ext = language === 'sql' ? 'sql' : language === 'mongo' ? 'js' : 'txt'
   const fileFilter = language === 'sql' ? 'SQL script' : language === 'mongo' ? 'Mongo script' : 'Redis commands'
-  const dirty = file ? text !== savedText : false
-  const saveFile = async (as = false) => {
+  const [baseline] = useState(() => initialText ?? STARTER[language])
+  // Linked to a file: differs from the file. Not linked: has text beyond what the tab opened with.
+  const dirty = file ? text !== savedText : text.trim() !== '' && text !== baseline && text !== STARTER[language]
+  useEffect(() => { onDirty?.(dirty) }, [dirty]) // eslint-disable-line react-hooks/exhaustive-deps
+  const saveFile = async (as = false): Promise<boolean> => {
     try {
       const p = await window.db.saveTextFile(text, { name: (file?.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '')) || title.replace(/[^\w -]/g, '') || 'query', filter: fileFilter, ext, path: as ? undefined : file })
-      if (!p) return
-      setFile(p); setSavedText(text); onFile?.(p); onStatus(`Saved to ${p}`)
-    } catch (e) { onStatus(`Could not save: ${errMsg(e)}`) }
+      if (!p) return false
+      setFile(p); setSavedText(text); onFile?.(p); onStatus(`Saved to ${p}`); return true
+    } catch (e) { onStatus(`Could not save: ${errMsg(e)}`); return false }
   }
+  useEffect(() => { registerSave?.(() => saveFile()) })
   const openFile = async () => {
     try {
       const f = await window.db.openTextFile({ filter: fileFilter, ext })
@@ -144,6 +158,10 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
     } catch (e) { onStatus(`Could not open: ${errMsg(e)}`) }
   }
   const [run, setRun] = useState<Run | null>(null)
+  // Pin a chart: only when the run was a single statement we can re-run
+  const pinFn = run?.sql && run.results.length === 1 && language === 'sql'
+    ? (chart: import('../dashboard').ChartCfg) => { addTile(conn.id, { title: title === 'Query' || /^Query \d+$/.test(title) ? chart.ys.join(', ') + ' by ' + chart.x : title, sql: run.sql!, chart }); onStatus('Pinned to the dashboard') }
+    : null
   const [plan, setPlan] = useState<ExplainResult | null>(null)
   const [activeResult, setActiveResult] = useState<number | 'messages' | 'plan'>(0)
   const [running, setRunning] = useState(false)
@@ -228,6 +246,39 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
     return { from: word.from, options: [...seen.values()], validFor: /^[\w$#@]*$/ }
   }, [])
 
+  // Foreign keys of every table, read once when JOIN suggestions are first needed
+  const fkCache = useRef<{ for: TableInfo[]; p: Promise<Map<string, ForeignKeyInfo[]>> } | null>(null)
+  const smart = useMemo(() => {
+    const loadFks = () => {
+      const ts = columnsRef.current.tables
+      if (fkCache.current?.for === ts) return fkCache.current.p
+      const p = (async () => {
+        const m = new Map<string, ForeignKeyInfo[]>()
+        const list = ts.filter((t) => t.type !== 'view').slice(0, 400)
+        let i = 0
+        await Promise.all(Array.from({ length: 6 }, async () => {
+          while (i < list.length) {
+            const t = list[i++]
+            const st = await window.db.getStructure(connId, t).catch(() => null)
+            if (st?.foreignKeys.length) m.set(`${(t.schema ?? '').toLowerCase()}.${t.name.toLowerCase()}`, st.foreignKeys)
+          }
+        }))
+        return m
+      })()
+      fkCache.current = { for: ts, p }
+      return p
+    }
+    return {
+      join: joinSource({ engine: dialect, tables: () => columnsRef.current.tables, foreignKeys: loadFks }),
+      value: valueSource({
+        engine: dialect,
+        tables: () => columnsRef.current.tables,
+        columnsOf: (t) => columnsRef.current.columns[`${t.schema ?? ''}.${t.name}`] ?? [],
+        run: async (q) => (await window.db.query(connId, q)).rows.map((r) => Object.values(r)[0])
+      })
+    }
+  }, [connId, dialect])
+
   /** Schema tree for the SQL autocomplete: schema → table → columns */
   const completionSchema = useMemo(() => {
     const ns: Record<string, Record<string, SQLNamespace>> = {}
@@ -284,7 +335,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
           : `Statement ${i + 1}: ${r.rowCount} row${r.rowCount === 1 ? '' : 's'} affected`
       }))
       messages.push({ time: clock(), text: `Completed in ${ms} ms` })
-      setRun({ results, messages })
+      setRun({ results, messages, sql: code })
       setLastError('')
       const firstGrid = results.findIndex((r) => r.columns.length)
       setActiveResult(firstGrid >= 0 ? firstGrid : 'messages')
@@ -393,7 +444,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
   const extensions = useMemo(() => [
     ...(isSql ? (() => {
       const lang = sql({ dialect: DIALECTS[dialect] ?? StandardSQL, upperCaseKeywords: true, schema: completionSchema.schema, defaultSchema: completionSchema.defaultSchema })
-      return [lang, lang.language.data.of({ autocomplete: columnSource }), ...(settings.snippets ? [lang.language.data.of({ autocomplete: snippetSource })] : [])]
+      return [lang, lang.language.data.of({ autocomplete: columnSource }), lang.language.data.of({ autocomplete: smart.join }), lang.language.data.of({ autocomplete: smart.value }), ...(settings.snippets ? [lang.language.data.of({ autocomplete: snippetSource })] : [])]
     })() : language === 'mongo' ? [javascript()] : []),
     errorLineField,
     keymap.of([
@@ -408,7 +459,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
     ].filter((k) => k.key)),
     EditorView.theme({ '&': { fontSize: 'var(--editor-font, 13px)' } })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [runCurrent, language, text, completionSchema, dialect, columnSource, settings, file])
+  ], [runCurrent, language, text, completionSchema, dialect, columnSource, settings, file, smart])
 
   const startDrag = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -537,7 +588,9 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
             </div>
           )}
           {activeResult === 'plan' && plan && <PlanView result={plan} />}
-          {current && <ResultView result={current} name={`${title} result ${(activeResult as number) + 1}`} onStatus={onStatus} />}
+          {current && (isSql && run?.sql && run.results.length === 1
+            ? <PinContext.Provider value={pinFn}><EditableResult result={current} sql={run.sql} tables={tables} name={`${title} result 1`} onStatus={onStatus} /></PinContext.Provider>
+            : <PinContext.Provider value={pinFn}><ResultView result={current} name={`${title} result ${(activeResult as number) + 1}`} onStatus={onStatus} /></PinContext.Provider>)}
         </div>
       </div>
       {askParams && (

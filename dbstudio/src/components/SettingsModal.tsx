@@ -1,11 +1,11 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { ACCENTS, DEFAULT_SETTINGS, readSettings, Settings, shortcutFor, writeSettings } from '../settings'
+import { ACCENTS, accentOf, applySettings, DEFAULT_SETTINGS, MONO_FONTS, readSettings, resolvedTheme, Settings, shortcutFor, THEME_PRESETS, UI_FONTS, writeSettings } from '../settings'
 import { IconPlus, IconSearch, IconTrash, IconX } from './Icons'
 import { EDITOR_THEMES } from '../editorThemes'
 import { BUILT_IN_SNIPPETS, readHiddenSnippets, readUserSnippets, Snippet, writeHiddenSnippets, writeUserSnippets } from '../snippets'
 import { ACTIONS, comboFromEvent, conflicts, keyCaps, normalise, RESERVED, SHORTCUT_GROUPS, SHORTCUTS, ShortcutAction } from '../shortcuts'
 import { errMsg } from '../util'
-import { readSavedQueries } from '../saved'
+import { readSavedQueries, saveQuery } from '../saved'
 import type { LicenceInfo } from '../../shared/types'
 
 const MODELS = [
@@ -28,6 +28,21 @@ export const SETTINGS_SECTIONS = [
 ] as const
 export type SettingsSection = typeof SETTINGS_SECTIONS[number][0]
 
+/** Which settings each section owns, for its Reset button */
+const SECTION_KEYS: Partial<Record<SettingsSection, (keyof Settings)[]>> = {
+  appearance: ['theme', 'accent', 'accentCustom', 'railColor', 'sidebarColor', 'statusColor', 'uiFont', 'uiSize', 'monoFont', 'fontSize', 'editorTheme', 'radius', 'density'],
+  editor: ['runCurrentStatement', 'queryParams', 'restoreTabs'],
+  formatting: ['keywordCase', 'indentWidth', 'snippets'],
+  shortcuts: ['shortcuts'],
+  results: ['rowLimit', 'pageSize'],
+  safety: ['blockNoWhere', 'confirmProduction'],
+  ai: ['aiModel'],
+  team: ['teamFolder'],
+  licence: ['updateUrl']
+}
+/** Settings that are not personal preferences; "Reset all" leaves them alone */
+const KEEP_ON_RESET_ALL: (keyof Settings)[] = ['teamFolder', 'updateUrl']
+
 /** Key caps, e.g. [Ctrl] [Shift] [P] */
 export function Keys({ combo, empty = 'Off' }: { combo: string; empty?: string }) {
   const caps = keyCaps(combo)
@@ -44,6 +59,31 @@ function Row({ label, help, children, wide }: { label: ReactNode; help?: ReactNo
     </div>
   )
 }
+/** Colour picker plus a hex box */
+function ColorInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [text, setText] = useState(value)
+  useEffect(() => setText(value), [value])
+  return (
+    <span className="color-pick">
+      <input type="color" value={/^#[0-9a-f]{6}$/i.test(value) ? value : '#000000'} onChange={(e) => onChange(e.target.value)} aria-label="Pick a colour" />
+      <input type="text" value={text} maxLength={7} onChange={(e) => { setText(e.target.value); if (/^#[0-9a-f]{6}$/i.test(e.target.value)) onChange(e.target.value.toLowerCase()) }} aria-label="Colour code" />
+    </span>
+  )
+}
+
+/** Theme default, or the user's own colour */
+function OptionalColor({ value, onChange, fallback }: { value: string; onChange: (v: string) => void; fallback: string }) {
+  return (
+    <span className="color-pick">
+      <span className="seg-ctl">
+        <button type="button" className={!value ? 'on' : ''} onClick={() => onChange('')}>Theme default</button>
+        <button type="button" className={value ? 'on' : ''} onClick={() => onChange(value || fallback)}>Own colour</button>
+      </span>
+      {value && <ColorInput value={value} onChange={onChange} />}
+    </span>
+  )
+}
+
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return <label className="toggle" title={label}><input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-label={label} /><span /></label>
 }
@@ -55,6 +95,7 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   const [key, setKey] = useState('')
   const [hasKey, setHasKey] = useState<boolean | null>(null)
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   const [userSnips, setUserSnips] = useState<Snippet[]>(readUserSnippets)
   const [hidden, setHidden] = useState<string[]>(readHiddenSnippets)
   const [snipsDirty, setSnipsDirty] = useState(false)
@@ -78,6 +119,8 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   }, [])
 
   const dirty = JSON.stringify(s) !== JSON.stringify(saved0) || snipsDirty || !!key
+  useEffect(() => { applySettings(s) }, [s])
+  useEffect(() => () => applySettings(readSettings()), [])
   const clash = useMemo(() => conflicts((a) => shortcutFor(s, a)), [s])
 
   const save = async () => {
@@ -172,11 +215,53 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   }
   const scq = scQuery.trim().toLowerCase()
 
+  const isDefault = (k: keyof Settings) => JSON.stringify(s[k]) === JSON.stringify(DEFAULT_SETTINGS[k])
+  const resetKeys = (keys: (keyof Settings)[]) => set(Object.fromEntries(keys.map((k) => [k, DEFAULT_SETTINGS[k]])) as Partial<Settings>)
+  const changedCount = (Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]).filter((k) => !KEEP_ON_RESET_ALL.includes(k) && !isDefault(k)).length
+  /** Everything personal in one file: settings, shortcuts, snippets and the saved-query library (no passwords or keys) */
+  const exportAll = async () => {
+    const data = { app: 'qubase', kind: 'settings', version: 1, exported: new Date().toISOString(), settings: s, snippets: userSnips, hiddenSnippets: hidden, savedQueries: readSavedQueries() }
+    const p = await window.db.saveTextFile(JSON.stringify(data, null, 2), { name: 'qubase-settings', filter: 'Qubase settings', ext: 'json' })
+    if (p) setInfo(`Exported to ${p}`)
+  }
+  const importAll = async () => {
+    setError(''); setInfo('')
+    try {
+      const f = await window.db.openTextFile({ filter: 'Qubase settings', ext: 'json' })
+      if (!f) return
+      const d = JSON.parse(f.content)
+      if (d?.kind !== 'settings' || typeof d.settings !== 'object') throw new Error('This file is not a Qubase settings export')
+      const qs: { name: string; text: string; engine?: string }[] = Array.isArray(d.savedQueries) ? d.savedQueries : []
+      if (!window.confirm(`Load settings from this file?\n\nSettings, shortcuts and snippets are filled in here (press Save to keep them).${qs.length ? `\n${qs.length} saved queries are added to your library now (same names are replaced).` : ''}`)) return
+      // Only known settings, so an old or edited file can't add junk
+      const known = Object.fromEntries(Object.entries(d.settings).filter(([k]) => k in DEFAULT_SETTINGS)) as Partial<Settings>
+      setS({ ...DEFAULT_SETTINGS, ...known })
+      if (Array.isArray(d.snippets)) { setUserSnips(d.snippets); setSnipsDirty(true) }
+      if (Array.isArray(d.hiddenSnippets)) { setHidden(d.hiddenSnippets); setSnipsDirty(true) }
+      for (const q of [...qs].reverse()) if (q?.name && q?.text) saveQuery(q.name, q.text, q.engine)
+      setInfo(`Loaded from ${f.path}. Press Save to keep the settings.`)
+    } catch (e) { setError(`Import failed: ${errMsg(e)}`) }
+  }
+  const resetAll = () => {
+    if (!window.confirm(`Put ${changedCount} changed setting${changedCount === 1 ? '' : 's'} back to the defaults?\n\nLooks, editor, formatting, shortcuts, results, safety and AI model are reset. Your team folder, update server, AI key, snippets and saved queries are kept. Nothing is stored until you press Save.`)) return
+    resetKeys((Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]).filter((k) => !KEEP_ON_RESET_ALL.includes(k)))
+  }
+
   const Section = ({ id, children, help }: { id: SettingsSection; children: ReactNode; help?: ReactNode }) => {
     const title = SETTINGS_SECTIONS.find((x) => x[0] === id)![1]
+    const keys = SECTION_KEYS[id]
+    const changed = keys ? keys.filter((k) => !isDefault(k)).length : 0
     return (
       <section id={`set-${id}`} className="settings-section" data-title={title}>
-        <h3>{title}</h3>
+        <div className="section-head">
+          <h3>{title}</h3>
+          {keys && (
+            <button type="button" className="btn btn-sm ghost reset-btn" disabled={!changed} onClick={() => resetKeys(keys)}
+              title={changed ? `Put the ${changed} changed setting${changed === 1 ? '' : 's'} in ${title} back to the defaults` : 'Already on the defaults'}>
+              {changed ? `Reset to defaults (${changed})` : 'Defaults'}
+            </button>
+          )}
+        </div>
         {help && <p className="section-help">{help}</p>}
         <div className="settings-card">{children}</div>
       </section>
@@ -191,7 +276,11 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
           <IconSearch className="search-icon" />
           <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search settings…" />
         </div>
+        {info && <span className="settings-info small-text">{info}</span>}
         <div className="spacer" />
+        <button className="btn btn-sm" onClick={importAll} title="Load settings, shortcuts, snippets and saved queries from a file">Import…</button>
+        <button className="btn btn-sm" onClick={exportAll} title="Save settings, shortcuts, snippets and saved queries to a file, to use on another computer">Export…</button>
+        <button className="btn btn-sm" onClick={resetAll} disabled={!changedCount} title="Put every setting back to the defaults (you still need to Save)">Reset all settings{changedCount ? ` (${changedCount})` : ''}</button>
         <button className="icon-btn" onClick={close} title="Close (Esc)"><IconX /></button>
       </header>
       <div className="settings-layout">
@@ -203,26 +292,94 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
           ))}
         </nav>
         <div className="settings-body modal-body" ref={body} onScroll={onScroll}>
-          {Section({ id: 'appearance', children: <>
+          {Section({ id: 'appearance', help: 'Changes show straight away; Save keeps them, Discard puts the old look back.', children: <>
+            <div className="preset-grid">
+              {THEME_PRESETS.map((pr) => {
+                const v = { ...s, ...pr.s } as Settings
+                const th = v.theme === 'system' ? resolvedTheme(s) : v.theme
+                const acc = accentOf(v, th)
+                const rail = v.railColor || (th === 'dark' ? '#141518' : '#26292e')
+                const side = v.sidebarColor || (th === 'dark' ? '#17191c' : '#f2f2f4')
+                const main = th === 'dark' ? '#1d1f23' : '#ffffff'
+                const status = v.statusColor === 'accent' ? acc : v.statusColor || rail
+                const on = Object.entries(pr.s).every(([k, val]) => (s as unknown as Record<string, unknown>)[k] === val)
+                return (
+                  <button key={pr.id} type="button" className={`preset ${on ? 'on' : ''}`} onClick={() => set(pr.s)} title={`Use the ${pr.label} look`}>
+                    <span className="mini">
+                      <span className="mini-rail" style={{ background: rail }} />
+                      <span className="mini-side" style={{ background: side, color: th === 'dark' || (v.sidebarColor && parseInt(v.sidebarColor.slice(1, 3), 16) < 120) ? '#fff' : '#000' }}><i /><i /><i /><i /></span>
+                      <span className="mini-main" style={{ background: main, color: th === 'dark' ? '#fff' : '#000' }}>
+                        <span className="mini-body"><span className="mini-btn" style={{ background: acc }} /><i /><i style={{ width: '70%' }} /><i style={{ width: '50%' }} /></span>
+                        <span className="mini-status" style={{ background: status }} />
+                      </span>
+                    </span>
+                    <span className="preset-name">{pr.label}</span>
+                  </button>
+                )
+              })}
+            </div>
             <Row label="Theme" help="“Same as Windows” follows your Windows light / dark setting.">
-              <select value={s.theme} onChange={(e) => set({ theme: e.target.value as Settings['theme'] })}>
-                <option value="system">Same as Windows</option><option value="light">Light</option><option value="dark">Dark</option>
-              </select>
+              <div className="seg-ctl">
+                {([['system', 'Same as Windows'], ['light', 'Light'], ['dark', 'Dark']] as const).map(([v, l]) => <button key={v} type="button" className={s.theme === v ? 'on' : ''} onClick={() => set({ theme: v })}>{l}</button>)}
+              </div>
             </Row>
-            <Row label="Accent colour" help="Buttons, highlights and the active tab.">
+            <Row label="Accent colour" help="Buttons, highlights, the active tab and links. Pick any colour with the rainbow swatch.">
               <div className="color-row">
                 {Object.entries(ACCENTS).map(([id, a]) => (
                   <button key={id} type="button" className={`swatch ${s.accent === id ? 'on' : ''}`} style={{ background: a.light }} title={a.label} onClick={() => set({ accent: id })} />
                 ))}
+                <button type="button" className={`swatch custom ${s.accent === 'custom' ? 'on' : ''}`} title="Your own colour" onClick={() => set({ accent: 'custom' })} />
+                {s.accent === 'custom' && <ColorInput value={s.accentCustom} onChange={(v) => set({ accentCustom: v })} />}
               </div>
+            </Row>
+            <Row label="Activity bar colour" help="The strip of icons on the far left.">
+              <OptionalColor value={s.railColor} onChange={(v) => set({ railColor: v })} fallback="#26292e" />
+            </Row>
+            <Row label="Sidebar colour" help="Table list and the saved-connections panel. Text turns light or dark to stay readable.">
+              <OptionalColor value={s.sidebarColor} onChange={(v) => set({ sidebarColor: v })} fallback="#f2f2f4" />
+            </Row>
+            <Row label="Status bar colour" help="The bar along the bottom of the window.">
+              <div className="color-pick">
+                <div className="seg-ctl">
+                  <button type="button" className={!s.statusColor ? 'on' : ''} onClick={() => set({ statusColor: '' })}>Charcoal</button>
+                  <button type="button" className={s.statusColor === 'accent' ? 'on' : ''} onClick={() => set({ statusColor: 'accent' })}>Accent</button>
+                  <button type="button" className={s.statusColor.startsWith('#') ? 'on' : ''} onClick={() => set({ statusColor: s.railColor || '#1f2328' })}>Own colour</button>
+                </div>
+                {s.statusColor.startsWith('#') && <ColorInput value={s.statusColor} onChange={(v) => set({ statusColor: v })} />}
+              </div>
+            </Row>
+            <Row label="Interface font" help={<span className="font-sample" style={{ fontFamily: (UI_FONTS[s.uiFont] ?? UI_FONTS.segoe)[1] }}>Tables, Connections · The quick brown fox 0123</span>}>
+              <select value={s.uiFont} onChange={(e) => set({ uiFont: e.target.value })}>
+                {Object.entries(UI_FONTS).map(([id, [l]]) => <option key={id} value={id}>{l}</option>)}
+              </select>
+            </Row>
+            <Row label="Interface text size" help="Menus, lists, tabs and buttons.">
+              <div className="seg-ctl">
+                {[12, 13, 14, 15, 16].map((n) => <button key={n} type="button" className={s.uiSize === n ? 'on' : ''} onClick={() => set({ uiSize: n })}>{n}</button>)}
+              </div>
+            </Row>
+            <Row label="Editor and grid font" help={<span className="font-sample" style={{ fontFamily: (MONO_FONTS[s.monoFont] ?? MONO_FONTS.cascadia)[1] }}>SELECT id, name FROM orders WHERE total &gt;= 100; -- 0O 1lI</span>}>
+              <select value={s.monoFont} onChange={(e) => set({ monoFont: e.target.value })}>
+                {Object.entries(MONO_FONTS).map(([id, [l]]) => <option key={id} value={id}>{l}</option>)}
+              </select>
+            </Row>
+            <Row label="Editor font size" help="Editor and result grid, 10–24.">
+              <input type="number" min={10} max={24} value={s.fontSize} onChange={(e) => set({ fontSize: Math.min(24, Math.max(10, Number(e.target.value) || 13)) })} />
             </Row>
             <Row label="Editor colours">
               <select value={s.editorTheme} onChange={(e) => set({ editorTheme: e.target.value })}>
                 {EDITOR_THEMES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
               </select>
             </Row>
-            <Row label="Font size" help="Editor and result grid, 10–24.">
-              <input type="number" min={10} max={24} value={s.fontSize} onChange={(e) => set({ fontSize: Math.min(24, Math.max(10, Number(e.target.value) || 13)) })} />
+            <Row label="Corners" help="How round buttons, fields, menus and cards are.">
+              <div className="seg-ctl">
+                {([['sharp', 'Sharp'], ['normal', 'Normal'], ['round', 'Round']] as const).map(([v, l]) => <button key={v} type="button" className={s.radius === v ? 'on' : ''} onClick={() => set({ radius: v })}>{l}</button>)}
+              </div>
+            </Row>
+            <Row label="Spacing" help="Height of table-list rows, grid rows, tabs and toolbars.">
+              <div className="seg-ctl">
+                {([['compact', 'Compact'], ['normal', 'Normal'], ['comfortable', 'Comfortable']] as const).map(([v, l]) => <button key={v} type="button" className={s.density === v ? 'on' : ''} onClick={() => set({ density: v })}>{l}</button>)}
+              </div>
             </Row>
           </> })}
 

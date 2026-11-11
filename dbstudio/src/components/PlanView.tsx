@@ -91,8 +91,99 @@ function fromXml(xml: string): Node | null {
   return walk(first)
 }
 
+/** SQLite (and other indented text plans): one step per line, nesting by indent. No costs, so each step gets a rough weight. */
+function fromText(text: string): Node | null {
+  const lines = text.split('\n').filter((l) => l.trim())
+  if (!lines.length || lines.length > 500) return null
+  const weight = (l: string) => /\bSCAN\b(?!.*USING (COVERING )?INDEX)/i.test(l) ? 10 : /TEMP B-TREE|SORT/i.test(l) ? 5 : /SEARCH|USING (COVERING )?INDEX|PRIMARY KEY/i.test(l) ? 1 : 0.5
+  const root: Node = { label: 'Query', detail: 'Weights are estimated (this database reports no costs)', cost: 0, children: [] }
+  const stack: { n: Node; indent: number }[] = [{ n: root, indent: -1 }]
+  for (const l of lines) {
+    const indent = l.search(/\S/)
+    const label = l.trim().replace(/^[└├│|`\-─\s]+/, '')
+    const n: Node = { label, detail: '', cost: weight(label), children: [] }
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) stack.pop()
+    stack[stack.length - 1].n.children.push(n)
+    stack.push({ n, indent })
+  }
+  // Subtree cost = own weight + children, like the real planners report
+  const sum = (n: Node): number => (n.cost = n.cost + n.children.reduce((a, c) => a + sum(c), 0))
+  sum(root)
+  return root
+}
+
+/** Plain-language advice from the plan's shape */
+function tipsFor(tree: Node): { level: 'warn' | 'info'; text: string }[] {
+  const out: { level: 'warn' | 'info'; text: string }[] = []
+  const total = tree.cost || 1
+  const seen = new Set<string>()
+  const add = (level: 'warn' | 'info', text: string) => { if (!seen.has(text)) { seen.add(text); out.push({ level, text }) } }
+  const walk = (n: Node) => {
+    const l = n.label
+    const self = Math.max(0, n.cost - n.children.reduce((a, c) => a + c.cost, 0))
+    const on = /\bon\s+([\w.$#@"[\]]+)/i.exec(l)?.[1] ?? /\b(?:SCAN|SEARCH)\s+(?:TABLE\s+)?([\w.$#@"]+)/i.exec(l)?.[1] ?? ''
+    if (/seq scan|table scan|clustered index scan|\bALL on\b|^SCAN\b(?!.*USING (COVERING )?INDEX)|full scan/i.test(l) && (n.rows === undefined || n.rows > 1000 || !n.rows))
+      add('warn', `Reads every row of ${on || 'a table'}${n.rows ? ` (about ${Math.round(n.rows).toLocaleString()} rows)` : ''}. An index on the columns in WHERE or JOIN for this table can make it much faster.`)
+    if (/\bsort\b|filesort|TEMP B-TREE/i.test(l + ' ' + n.detail))
+      add('info', `Sorts rows${/ORDER BY|Sort Key/i.test(l + n.detail) ? ' for ORDER BY' : /GROUP|DISTINCT/i.test(l + n.detail) ? ' for GROUP BY / DISTINCT' : ''}. An index that matches the sort order lets the database skip this step.`)
+    if (/temporary table|Using temporary/i.test(n.detail)) add('info', 'Builds a temporary table. Simplifying GROUP BY / DISTINCT or adding an index can avoid it.')
+    if (/nested loop/i.test(l) && n.children.some((c) => (c.rows ?? 0) > 10000)) add('warn', 'Nested loop over many rows. Check that the joined columns have indexes.')
+    if (/warnings/i.test(n.detail)) add('warn', 'SQL Server reported warnings on a step (for example a missing index or an implicit type conversion). See the raw plan for details.')
+    if (/key lookup|rid lookup/i.test(l)) add('info', `Looks up extra columns row by row${on ? ` in ${on}` : ''}. Adding those columns to the index (INCLUDE) avoids it.`)
+    if (self / total > 0.5 && n !== tree) add('warn', `“${l}” is ${(self / total * 100).toFixed(0)}% of the estimated cost. Start there.`)
+    n.children.forEach(walk)
+  }
+  walk(tree)
+  return out
+}
+
+/** Plan as boxes and arrows, top-down; box colour shows each step's share of the cost */
+function PlanDiagram({ tree }: { tree: Node }) {
+  const W = 220, H = 70, GX = 26, GY = 46
+  const total = tree.cost || 1
+  type P = { n: Node; x: number; y: number; self: number }
+  const placed: P[] = []
+  const links: [P, P][] = []
+  let leaf = 0
+  const place = (n: Node, depth: number): P => {
+    const kids = n.children.map((c) => place(c, depth + 1))
+    const x = kids.length ? (kids[0].x + kids[kids.length - 1].x) / 2 : leaf++ * (W + GX)
+    const p = { n, x, y: depth * (H + GY), self: Math.max(0, n.cost - n.children.reduce((a, c) => a + c.cost, 0)) }
+    placed.push(p)
+    kids.forEach((k) => links.push([p, k]))
+    return p
+  }
+  place(tree, 0)
+  const width = Math.max(...placed.map((p) => p.x)) + W + 20
+  const height = Math.max(...placed.map((p) => p.y)) + H + 20
+  const cut = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + '…' : t)
+  return (
+    <div className="plan-diagram">
+      <svg width={width} height={height}>
+        <g transform="translate(10 10)">
+          {links.map(([a, b], i) => <path key={i} className="pd-link" d={`M ${a.x + W / 2} ${a.y + H} C ${a.x + W / 2} ${a.y + H + GY / 2}, ${b.x + W / 2} ${b.y - GY / 2}, ${b.x + W / 2} ${b.y}`} />)}
+          {placed.map((p, i) => {
+            const share = p.self / total
+            return (
+              <g key={i} transform={`translate(${p.x} ${p.y})`} className={`pd-node ${share > 0.3 ? 'hot' : share > 0.1 ? 'warm' : ''}`}>
+                <title>{`${p.n.label}\n${p.n.detail}\nSubtree cost ${p.n.cost}`}</title>
+                <rect width={W} height={H} rx={8} />
+                <rect width={Math.max(2, W * Math.min(1, share))} height={4} y={H - 4} className="pd-bar" />
+                <text x={10} y={20} className="pd-label">{cut(p.n.label, 30)}</text>
+                <text x={10} y={38} className="pd-detail">{cut(p.n.detail || ' ', 36)}</text>
+                <text x={10} y={56} className="pd-num">{(share * 100).toFixed(share < 0.1 ? 1 : 0)}% of cost{p.n.rows ? ` · ${Math.round(p.n.rows).toLocaleString()} rows` : ''}</text>
+              </g>
+            )
+          })}
+        </g>
+      </svg>
+    </div>
+  )
+}
+
 function parse(r: ExplainResult): Node | null {
   try {
+    if (r.format === 'text') return fromText(r.plan)
     if (r.format === 'xml') return fromXml(r.plan)
     if (r.format === 'json') {
       const j = JSON.parse(r.plan)
@@ -105,7 +196,11 @@ function parse(r: ExplainResult): Node | null {
 /** Query plan as a tree with cost bars; the costliest steps are highlighted. */
 export function PlanView({ result }: { result: ExplainResult }) {
   const tree = useMemo(() => parse(result), [result])
-  const [raw, setRaw] = useState(false)
+  const tips = useMemo(() => (tree ? tipsFor(tree) : []), [tree])
+  const [mode, setMode] = useState<'tree' | 'diagram' | 'raw'>(() => { try { return (localStorage.getItem('planMode') as 'tree' | 'diagram') || 'tree' } catch { return 'tree' } })
+  const raw = mode === 'raw'
+  const setRaw = (r: boolean) => setMode(r ? 'raw' : 'tree')
+  const pick = (m: 'tree' | 'diagram' | 'raw') => { setMode(m); try { if (m !== 'raw') localStorage.setItem('planMode', m) } catch { /* ignore */ } }
   if (!tree || raw) {
     return (
       <div className="plan-view">
@@ -127,10 +222,19 @@ export function PlanView({ result }: { result: ExplainResult }) {
       <div className="plan-bar">
         <span className="muted small-text">Estimated plan · total cost {tree.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
         <div className="spacer" />
-        <button className="btn btn-sm" onClick={() => setRaw(true)}>Raw plan</button>
+        <div className="seg-ctl">
+          <button type="button" className={mode === 'tree' ? 'on' : ''} onClick={() => pick('tree')}>Tree</button>
+          <button type="button" className={mode === 'diagram' ? 'on' : ''} onClick={() => pick('diagram')}>Diagram</button>
+          <button type="button" onClick={() => setRaw(true)}>Raw</button>
+        </div>
         <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(result.plan)}>Copy</button>
       </div>
-      <div className="plan-rows">
+      {tips.length > 0 && (
+        <ul className="plan-tips">
+          {tips.map((t, i) => <li key={i} className={t.level}><span className="tip-ico">{t.level === 'warn' ? '!' : 'i'}</span>{t.text}</li>)}
+        </ul>
+      )}
+      {mode === 'diagram' ? <PlanDiagram tree={tree} /> : <div className="plan-rows">
         {rows.map(({ n, depth, self }, i) => {
           const share = self / total
           return (
@@ -146,7 +250,7 @@ export function PlanView({ result }: { result: ExplainResult }) {
             </div>
           )
         })}
-      </div>
+      </div>}
     </div>
   )
 }

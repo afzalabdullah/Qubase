@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { TableInfo, TableStructure } from '../../shared/types'
+import type { ColumnInfo, ForeignKeyInfo, TableInfo, TableStructure } from '../../shared/types'
 import { IconRefresh } from './Icons'
 import { errMsg } from '../util'
 import { useConn } from '../settings'
 
-const BOX_W = 230, HEAD_H = 28, ROW_H = 19, MAX_COLS = 14, GAP_X = 90, GAP_Y = 50
-const MAX_TABLES = 150
+const HEAD_H = 34, ROW_H = 22, PAD_X = 12, GAP_X = 230, GAP_Y = 70, MIN_W = 190, MAX_W = 420
+const MAX_TABLES = 200
+const NAME_CH = 7.2, TYPE_CH = 6.7, BADGE_W = 24
 
-interface Box { t: TableInfo; s: TableStructure; key: string }
+type ColMode = 'all' | 'keys' | 'names'
+interface Box { t: TableInfo; s: TableStructure; key: string; w: number }
+interface Rel { id: string; from: Box; to?: Box; fk: ForeignKeyInfo; one: boolean; optional: boolean }
+
 const keyOf = (t: { schema?: string; name: string }) => `${t.schema ?? ''}.${t.name}`.toLowerCase()
+const fullName = (t: TableInfo) => (t.schema ? `${t.schema}.${t.name}` : t.name)
 
 /** Run tasks a few at a time */
 async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
@@ -20,25 +25,41 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Prom
   return out
 }
 
-/** Entity-relationship diagram drawn from the foreign keys. Drag tables to move them; scroll to zoom. */
+const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.map((y) => y.toLowerCase()).includes(x.toLowerCase()))
+
+/** Box width that fits the longest "badge name type" row */
+function widthOf(t: TableInfo, s: TableStructure) {
+  const title = (fullName(t).length + 4) * 7.6 + PAD_X * 2
+  const rows = s.columns.map((c) => BADGE_W + c.name.length * NAME_CH + 18 + (c.dataType.length + 2) * TYPE_CH + PAD_X * 2)
+  return Math.round(Math.min(MAX_W, Math.max(MIN_W, title, ...rows)))
+}
+
+/** Entity-relationship diagram: every column, labelled relationships with crow's-foot ends, export to images and text formats. */
 export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void }) {
-  const { connId } = useConn()
+  const { connId, conn } = useConn()
+  const [bend, setBend] = useState<Record<string, { dx: number; dy: number }>>({})
+  const layoutKey = () => `erLayout:${conn?.id ?? connId}:${schema}`
   const [boxes, setBoxes] = useState<Box[]>([])
   const [pos, setPos] = useState<Record<string, { x: number; y: number }>>({})
-  const [view, setView] = useState({ x: 20, y: 20, k: 0.8 })
+  const [view, setView] = useState({ x: 20, y: 20, k: 0.85 })
   const [schema, setSchema] = useState('')
   const [schemas, setSchemas] = useState<string[]>([])
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [hover, setHover] = useState('')
+  const [hoverRel, setHoverRel] = useState('')
+  const [mode, setMode] = useState<ColMode>('all')
+  const [labels, setLabels] = useState(true)
+  const [panel, setPanel] = useState(true)
+  const [find, setFind] = useState('')
+  const [menu, setMenu] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
 
   const load = async () => {
     setError(''); setStatus('Loading tables…')
     try {
       const all = (await window.db.listTables(connId)).filter((t) => t.type !== 'view')
-      const sch = [...new Set(all.map((t) => t.schema ?? ''))].filter(Boolean)
-      setSchemas(sch)
+      setSchemas([...new Set(all.map((t) => t.schema ?? ''))].filter(Boolean))
       const picked = all.filter((t) => !schema || t.schema === schema).slice(0, MAX_TABLES)
       let done = 0
       const structs = await pool(picked, 6, async (t) => {
@@ -46,28 +67,57 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
         setStatus(`Reading structure ${++done} / ${picked.length}…`)
         return s
       })
-      const list = picked.map((t, i) => ({ t, s: structs[i], key: keyOf(t) }))
+      const list = picked.map((t, i) => ({ t, s: structs[i], key: keyOf(t), w: widthOf(t, structs[i]) }))
       setBoxes(list)
-      setPos(layout(list))
+      let p = layout(list, mode)
+      try {
+        const saved = JSON.parse(localStorage.getItem(layoutKey()) ?? 'null')
+        if (saved?.pos) p = { ...p, ...Object.fromEntries(Object.entries(saved.pos as Record<string, { x: number; y: number }>).filter(([k]) => p[k])) }
+        setBend(saved?.bend ?? {})
+      } catch { setBend({}) }
+      setPos(p)
+      requestAnimationFrame(() => fit(list, p, mode))
       setStatus(all.length > picked.length && !schema ? `Showing the first ${MAX_TABLES} of ${all.length} tables; pick a schema to narrow it down.` : '')
     } catch (e) { setError(errMsg(e)); setStatus('') }
   }
-  useEffect(() => { load() }, [connId, schema])
+  useEffect(() => { load() }, [connId, schema]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const height = (b: Box) => HEAD_H + Math.min(b.s.columns.length, MAX_COLS + 1) * ROW_H + 6
+  useEffect(() => {
+    if (!boxes.length) return
+    const t = setTimeout(() => { try { localStorage.setItem(layoutKey(), JSON.stringify({ pos, bend })) } catch { /* storage full */ } }, 400)
+    return () => clearTimeout(t)
+  }, [pos, bend]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const byKey = useMemo(() => new Map(boxes.map((b) => [b.key, b])), [boxes])
 
-  /** Tables with the most links go in the middle of the grid, linked tables near each other. */
-  function layout(list: Box[]) {
+  /** Every foreign key, with whether it is one-to-one (key columns unique) and optional (nullable) */
+  const rels: Rel[] = useMemo(() => boxes.flatMap((b) => b.s.foreignKeys.map((fk, i) => {
+    const to = byKey.get(keyOf({ schema: fk.refSchema ?? b.t.schema, name: fk.refTable }))
+    const pk = b.s.columns.filter((c) => c.primaryKey).map((c) => c.name)
+    const one = (pk.length > 0 && sameSet(fk.columns, pk)) || b.s.indexes.some((ix) => (ix.unique || ix.primary) && sameSet(ix.columns, fk.columns))
+    const optional = fk.columns.some((n) => b.s.columns.find((c) => c.name === n)?.nullable)
+    return { id: `${b.key}#${fk.name || i}`, from: b, to, fk, one, optional }
+  })), [boxes, byKey])
+
+  const fkCols = (b: Box) => new Set(b.s.foreignKeys.flatMap((f) => f.columns))
+  const uniqueCols = (b: Box) => new Set(b.s.indexes.filter((ix) => ix.unique && !ix.primary && ix.columns.length === 1).flatMap((ix) => ix.columns))
+  const rowsOf = (b: Box, m = mode): ColumnInfo[] => {
+    if (m === 'names') return []
+    if (m === 'keys') { const f = fkCols(b); return b.s.columns.filter((c) => c.primaryKey || f.has(c.name)) }
+    return b.s.columns
+  }
+  const height = (b: Box, m = mode) => HEAD_H + rowsOf(b, m).length * ROW_H + (m === 'names' ? 0 : 6)
+
+  /** Most-linked tables first, neighbours kept together; columns as wide as their widest table. */
+  function layout(list: Box[], m: ColMode) {
     const deg = new Map(list.map((b) => [b.key, 0]))
     const links = new Map(list.map((b) => [b.key, new Set<string>()]))
     for (const b of list) for (const fk of b.s.foreignKeys) {
       const to = keyOf({ schema: fk.refSchema ?? b.t.schema, name: fk.refTable })
-      if (!deg.has(to)) continue
+      if (!deg.has(to) || to === b.key) continue
       deg.set(b.key, deg.get(b.key)! + 1); deg.set(to, deg.get(to)! + 1)
       links.get(b.key)!.add(to); links.get(to)!.add(b.key)
     }
-    // Breadth-first from the most connected table keeps neighbours together
     const order: string[] = [], seen = new Set<string>()
     for (const start of [...list].sort((a, b) => deg.get(b.key)! - deg.get(a.key)!).map((b) => b.key)) {
       if (seen.has(start)) continue
@@ -77,22 +127,54 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
         for (const n of [...links.get(k)!].sort((a, b) => deg.get(b)! - deg.get(a)!)) if (!seen.has(n)) { seen.add(n); q.push(n) }
       }
     }
-    const cols = Math.max(1, Math.ceil(Math.sqrt(order.length * 1.6)))
-    const out: Record<string, { x: number; y: number }> = {}
     const map = new Map(list.map((b) => [b.key, b]))
+    const cols = Math.max(1, Math.ceil(Math.sqrt(order.length * 1.3)))
+    const colW = Array.from({ length: cols }, (_, c) => Math.max(MIN_W, ...order.filter((_, i) => i % cols === c).map((k) => map.get(k)!.w)))
+    const colX = colW.map((_, c) => colW.slice(0, c).reduce((a, w) => a + w + GAP_X, 0))
+    const out: Record<string, { x: number; y: number }> = {}
     let y = 0
     for (let r = 0; r * cols < order.length; r++) {
       const row = order.slice(r * cols, r * cols + cols)
-      row.forEach((k, c) => { out[k] = { x: c * (BOX_W + GAP_X), y } })
-      y += Math.max(...row.map((k) => height(map.get(k)!))) + GAP_Y
+      row.forEach((k, c) => { out[k] = { x: colX[c], y } })
+      y += Math.max(...row.map((k) => height(map.get(k)!, m))) + GAP_Y
     }
     return out
   }
 
+  const bounds = (list = boxes, p = pos, m = mode) => {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+    for (const b of list) { const q = p[b.key]; if (!q) continue; x1 = Math.min(x1, q.x); y1 = Math.min(y1, q.y); x2 = Math.max(x2, q.x + b.w); y2 = Math.max(y2, q.y + height(b, m)) }
+    return x1 === Infinity ? { x: 0, y: 0, w: 100, h: 100 } : { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+  }
+  function fit(list = boxes, p = pos, m = mode) {
+    const el = svgRef.current
+    if (!el || !list.length) return
+    const r = el.getBoundingClientRect(), b = bounds(list, p, m)
+    const k = Math.min(1.2, Math.max(0.12, Math.min((r.width - 40) / b.w, (r.height - 40) / b.h)))
+    setView({ k, x: (r.width - b.w * k) / 2 - b.x * k, y: (r.height - b.h * k) / 2 - b.y * k })
+  }
+  const zoom = (f: number) => {
+    const r = svgRef.current!.getBoundingClientRect(), mx = r.width / 2, my = r.height / 2
+    setView((v) => { const k = Math.min(2.5, Math.max(0.12, v.k * f)); return { k, x: mx - ((mx - v.x) * k) / v.k, y: my - ((my - v.y) * k) / v.k } })
+  }
+  const focus = (key: string) => {
+    const b = byKey.get(key), p = pos[key], el = svgRef.current
+    if (!b || !p || !el) return
+    const r = el.getBoundingClientRect(), k = Math.max(view.k, 0.9)
+    setView({ k, x: r.width / 2 - (p.x + b.w / 2) * k, y: r.height / 2 - (p.y + height(b) / 2) * k })
+    setHover(key)
+  }
+  const changeMode = (m: ColMode) => { setMode(m); const p = layout(boxes, m); setPos(p); setBend({}); requestAnimationFrame(() => fit(boxes, p, m)) }
+
   // ---- pan, zoom, drag ----
-  const drag = useRef<{ kind: 'pan' | 'box'; key?: string; sx: number; sy: number; ox: number; oy: number } | null>(null)
+  const drag = useRef<{ kind: 'pan' | 'box' | 'rel'; key?: string; sx: number; sy: number; ox: number; oy: number } | null>(null)
+  const onRelDown = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); setMenu(false)
+    const b = bend[id] ?? { dx: 0, dy: 0 }
+    drag.current = { kind: 'rel', key: id, sx: e.clientX, sy: e.clientY, ox: b.dx, oy: b.dy }
+  }
   const onDown = (e: React.MouseEvent, key?: string) => {
-    e.stopPropagation()
+    e.stopPropagation(); setMenu(false)
     const p = key ? pos[key] : view
     drag.current = { kind: key ? 'box' : 'pan', key, sx: e.clientX, sy: e.clientY, ox: p.x, oy: p.y }
   }
@@ -101,82 +183,276 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     if (!d) return
     const dx = e.clientX - d.sx, dy = e.clientY - d.sy
     if (d.kind === 'pan') setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }))
+    else if (d.kind === 'rel') setBend((b) => ({ ...b, [d.key!]: { dx: d.ox + dx / view.k, dy: d.oy + dy / view.k } }))
     else setPos((p) => ({ ...p, [d.key!]: { x: d.ox + dx / view.k, y: d.oy + dy / view.k } }))
   }
   const onWheel = (e: React.WheelEvent) => {
     const r = svgRef.current!.getBoundingClientRect()
     const mx = e.clientX - r.left, my = e.clientY - r.top
-    const k = Math.min(2.5, Math.max(0.15, view.k * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
+    const k = Math.min(2.5, Math.max(0.12, view.k * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
     setView((v) => ({ k, x: mx - ((mx - v.x) * k) / v.k, y: my - ((my - v.y) * k) / v.k }))
   }
 
-  // ---- foreign key lines ----
-  const lines = boxes.flatMap((b) => b.s.foreignKeys.flatMap((fk) => {
-    const target = byKey.get(keyOf({ schema: fk.refSchema ?? b.t.schema, name: fk.refTable }))
-    const a = pos[b.key], t = target && pos[target.key]
-    if (!target || !a || !t) return []
-    const colIdx = Math.min(MAX_COLS, Math.max(0, b.s.columns.findIndex((c) => c.name === fk.columns[0])))
-    const refIdx = Math.min(MAX_COLS, Math.max(0, target.s.columns.findIndex((c) => c.name === fk.refColumns[0])))
-    const y1 = a.y + HEAD_H + colIdx * ROW_H + ROW_H / 2
-    const y2 = t.y + HEAD_H + refIdx * ROW_H + ROW_H / 2
-    const rightward = t.x > a.x + BOX_W / 2
-    const x1 = rightward ? a.x + BOX_W : a.x
-    const x2 = target === b ? a.x + BOX_W : rightward ? t.x : t.x + BOX_W
-    const bend = target === b ? 60 : Math.max(40, Math.abs(x2 - x1) / 2)
-    const c1 = rightward || target === b ? x1 + bend : x1 - bend
-    const c2 = target === b ? x2 + bend : rightward ? x2 - bend : x2 + bend
-    const on = hover === b.key || hover === target.key
-    return [<path key={`${b.key}-${fk.name}`} d={`M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`} className={`er-line ${on ? 'on' : ''}`} markerEnd="url(#er-arrow)"><title>{`${b.t.name}.${fk.columns.join(', ')} → ${fk.refTable}.${fk.refColumns.join(', ')}`}</title></path>]
-  }))
+  /** y of a column's row centre, or the header centre when the column isn't shown */
+  const rowY = (b: Box, col: string) => {
+    const i = rowsOf(b).findIndex((c) => c.name.toLowerCase() === col.toLowerCase())
+    return i < 0 ? HEAD_H / 2 : HEAD_H + i * ROW_H + ROW_H / 2
+  }
+
+  // ---- relationship lines with crow's-foot ends ----
+  const relEls = rels.filter((r) => r.to && pos[r.from.key] && pos[r.to.key]).map((r) => {
+    const a = pos[r.from.key], t = pos[r.to!.key], A = r.from, T = r.to!
+    const self = A === T
+    const y1 = a.y + rowY(A, r.fk.columns[0] ?? ''), y2 = t.y + rowY(T, r.fk.refColumns[0] ?? '')
+    const right = self || t.x + T.w / 2 > a.x + A.w / 2
+    const x1 = right ? a.x + A.w : a.x
+    const x2 = self ? a.x + A.w : right ? t.x : t.x + T.w
+    const s1 = right ? 1 : -1, s2 = self ? 1 : right ? -1 : 1
+    const curve = self ? 70 : Math.max(50, Math.abs(x2 - x1) / 2)
+    const c1x = x1 + s1 * curve, c2x = x2 + s2 * curve
+    const on = hoverRel === r.id || hover === A.key || hover === T.key
+    const dim = (hover || hoverRel) && !on
+    // Bezier midpoint for the label
+    const off = bend[r.id]
+    const mx = (x1 + 3 * c1x + 3 * c2x + x2) / 8 + (off?.dx ?? 0), my = (y1 + 3 * y1 + 3 * y2 + y2) / 8 + (off?.dy ?? 0)
+    // A moved label pulls the line through it: two curves meeting smoothly at the label
+    const hx = Math.max(40, Math.abs(x2 - x1) / 4) * (x2 >= x1 ? 1 : -1)
+    const d = off
+      ? `M ${x1} ${y1} C ${x1 + s1 * 50} ${y1}, ${mx - hx} ${my}, ${mx} ${my} C ${mx + hx} ${my}, ${x2 + s2 * 50} ${y2}, ${x2} ${y2}`
+      : `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`
+    const label = `${r.fk.columns.join(', ')} → ${r.fk.refColumns.join(', ')}`
+    const card = r.one ? '1 : 1' : 'N : 1'
+    const lw = Math.max(label.length, card.length + 6) * 6.2 + 14
+    // Child end (many or one, optional circle); parent end (exactly one)
+    const e1 = x1 + s1 * 14, e2 = x2 + s2 * 14
+    return (
+      <g key={r.id} className={`er-rel ${on ? 'on' : ''} ${dim ? 'dim' : ''}`} onMouseEnter={() => setHoverRel(r.id)} onMouseLeave={() => setHoverRel('')}>
+        <path d={d} className="er-hit" onMouseDown={(e) => onRelDown(e, r.id)} />
+        <path d={d} className={`er-line ${r.optional ? 'opt' : ''}`} />
+        {r.one
+          ? <path d={`M ${x1 + s1 * 8} ${y1 - 6} V ${y1 + 6}`} className="er-end" />
+          : <path d={`M ${e1} ${y1} L ${x1} ${y1 - 7} M ${e1} ${y1} L ${x1} ${y1} M ${e1} ${y1} L ${x1} ${y1 + 7}`} className="er-end" />}
+        {r.optional
+          ? <circle cx={x1 + s1 * 20} cy={y1} r={4} className="er-ring" />
+          : <path d={`M ${x1 + s1 * 18} ${y1 - 6} V ${y1 + 6}`} className="er-end" />}
+        <path d={`M ${x2 + s2 * 7} ${y2 - 6} V ${y2 + 6} M ${x2 + s2 * 12} ${y2 - 6} V ${y2 + 6}`} className="er-end" />
+        {(labels || on || off) && (
+          <g transform={`translate(${mx} ${my})`} className="er-label" onMouseDown={(e) => onRelDown(e, r.id)} onDoubleClick={(e) => { e.stopPropagation(); setBend((b) => { const n = { ...b }; delete n[r.id]; return n }) }}>
+            <rect x={-lw / 2} y={-17} width={lw} height={34} rx={6} />
+            <text y={-3} textAnchor="middle" className="er-label-name">{label}</text>
+            <text y={11} textAnchor="middle" className="er-label-card">{card}{r.optional ? ' · optional' : ''}</text>
+            <title>{`${fullName(A.t)}.${r.fk.columns.join(', ')} → ${fullName(T.t)}.${r.fk.refColumns.join(', ')}${r.fk.name ? `\nConstraint: ${r.fk.name}` : ''}\n${r.one ? 'One' : 'Many'} ${A.t.name} to one ${T.t.name}`}</title>
+          </g>
+        )}
+      </g>
+    )
+  })
+
+  // Columns to highlight while a relationship is hovered
+  const hot = new Set<string>()
+  for (const r of rels) if (r.to && (r.id === hoverRel)) {
+    r.fk.columns.forEach((c) => hot.add(`${r.from.key}|${c.toLowerCase()}`))
+    r.fk.refColumns.forEach((c) => hot.add(`${r.to!.key}|${c.toLowerCase()}`))
+  }
+  const q = find.trim().toLowerCase()
+
+  // ---- export ----
+  const baseName = () => `er-diagram${schema ? '-' + schema : ''}`
+  /** Stand-alone SVG with real colours (no CSS variables) cropped to the tables */
+  const exportSvg = () => {
+    const src = svgRef.current!
+    const clone = src.cloneNode(true) as SVGSVGElement
+    const a = [src, ...src.querySelectorAll('*')] as Element[]
+    const b = [clone, ...clone.querySelectorAll('*')] as Element[]
+    const props = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity', 'font-size', 'font-weight', 'font-family', 'font-style']
+    a.forEach((el, i) => {
+      const cs = getComputedStyle(el)
+      b[i].setAttribute('style', props.map((p) => `${p}:${cs.getPropertyValue(p)}`).join(';'))
+      b[i].removeAttribute('class')
+    })
+    clone.querySelectorAll('[data-noexport]').forEach((n) => n.remove())
+    const pad = 30, bb = bounds()
+    const g = clone.querySelector('g[data-root]')!
+    g.setAttribute('transform', `translate(${pad - bb.x} ${pad - bb.y})`)
+    const W = Math.ceil(bb.w + pad * 2), H = Math.ceil(bb.h + pad * 2)
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    clone.setAttribute('width', String(W)); clone.setAttribute('height', String(H)); clone.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    clone.setAttribute('style', `background:${getComputedStyle(src).backgroundColor}`)
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    bg.setAttribute('width', '100%'); bg.setAttribute('height', '100%'); bg.setAttribute('fill', getComputedStyle(src).backgroundColor)
+    clone.insertBefore(bg, clone.firstChild)
+    return { svg: new XMLSerializer().serializeToString(clone), W, H }
+  }
+  const toPng = async (scale = 2) => {
+    const { svg, W, H } = exportSvg()
+    const img = new Image()
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+    await img.decode()
+    const k = Math.min(scale, 16000 / Math.max(W, H))
+    const c = document.createElement('canvas'); c.width = Math.round(W * k); c.height = Math.round(H * k)
+    const ctx = c.getContext('2d')!; ctx.scale(k, k); ctx.drawImage(img, 0, 0)
+    return c
+  }
+  const say = (p: string | null) => { if (p) setStatus(`Saved to ${p}`) }
+  /** Browser-style download; used when the app's file bridge is older than this page (e.g. dev reload) */
+  const download = (blob: Blob, file: string) => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+    setStatus(`Saving ${file}…`)
+  }
+  const saveText = async (text: string, filter: string, ext: string, mime = 'text/plain') => {
+    if (typeof window.db.saveTextFile === 'function') say(await window.db.saveTextFile(text, { name: baseName(), filter, ext }))
+    else download(new Blob([text], { type: mime }), `${baseName()}.${ext}`)
+  }
+  const run = async (f: () => Promise<void>) => { setMenu(false); setError(''); setStatus(''); setHover(''); setHoverRel(''); await new Promise((r) => setTimeout(r, 60)); try { await f() } catch (e) { setError(`Export failed: ${errMsg(e)}`) } }
+
+  const ident = (s: string) => s.replace(/[^\w]/g, '_')
+  const mermaid = () => [
+    'erDiagram',
+    ...boxes.map((b) => `  ${ident(fullName(b.t))} {\n${b.s.columns.map((c) => `    ${ident(c.dataType || 'unknown') || 'unknown'} ${ident(c.name)}${c.primaryKey ? ' PK' : fkCols(b).has(c.name) ? ' FK' : ''}${c.nullable ? '' : ' "not null"'}`).join('\n')}\n  }`),
+    ...rels.filter((r) => r.to).map((r) => `  ${ident(fullName(r.to!.t))} ||--${r.one ? (r.optional ? 'o|' : '||') : (r.optional ? 'o{' : '|{')} ${ident(fullName(r.from.t))} : "${r.fk.columns.join(', ')}"`)
+  ].join('\n') + '\n'
+  const dbml = () => [
+    ...boxes.map((b) => `Table ${b.t.schema ? `"${b.t.schema}"."${b.t.name}"` : `"${b.t.name}"`} {\n${b.s.columns.map((c) => {
+      const o = [c.primaryKey && 'pk', !c.nullable && !c.primaryKey && 'not null', c.autoIncrement && 'increment', uniqueCols(b).has(c.name) && 'unique', c.defaultValue != null && `default: \`${c.defaultValue}\``].filter(Boolean)
+      return `  "${c.name}" "${c.dataType}"${o.length ? ` [${o.join(', ')}]` : ''}`
+    }).join('\n')}\n}\n`),
+    ...rels.map((r) => {
+      const ref = r.to ? (r.to.t.schema ? `"${r.to.t.schema}"."${r.to.t.name}"` : `"${r.to.t.name}"`) : `"${r.fk.refTable}"`
+      const own = r.from.t.schema ? `"${r.from.t.schema}"."${r.from.t.name}"` : `"${r.from.t.name}"`
+      return `Ref${r.fk.name ? ` "${r.fk.name}"` : ''}: ${own}.(${r.fk.columns.map((c) => `"${c}"`).join(', ')}) ${r.one ? '-' : '>'} ${ref}.(${r.fk.refColumns.map((c) => `"${c}"`).join(', ')})`
+    })
+  ].join('\n') + '\n'
+  const plantuml = () => [
+    '@startuml', 'hide circle', 'skinparam linetype ortho', '',
+    ...boxes.map((b) => `entity "${fullName(b.t)}" as ${ident(fullName(b.t))} {\n${b.s.columns.filter((c) => c.primaryKey).map((c) => `  * ${c.name} : ${c.dataType} <<PK>>`).join('\n')}\n  --\n${b.s.columns.filter((c) => !c.primaryKey).map((c) => `  ${c.nullable ? '' : '* '}${c.name} : ${c.dataType}${fkCols(b).has(c.name) ? ' <<FK>>' : ''}`).join('\n')}\n}\n`),
+    ...rels.filter((r) => r.to).map((r) => `${ident(fullName(r.from.t))} ${r.one ? (r.optional ? '|o' : '||') : (r.optional ? '}o' : '}|')}--|| ${ident(fullName(r.to!.t))} : ${r.fk.columns.join(', ')}`),
+    '@enduml'
+  ].join('\n') + '\n'
+
+  const EXPORTS: { label: string; hint: string; go: () => Promise<void> }[] = [
+    { label: 'PNG image', hint: 'High resolution, for documents and chat', go: async () => { const c = await toPng(2); if (typeof window.db.saveBinaryFile === 'function') say(await window.db.saveBinaryFile(c.toDataURL('image/png').split(',')[1], { name: baseName(), filter: 'PNG image', ext: 'png' })); else download(await new Promise<Blob>((r) => c.toBlob((b) => r(b!), 'image/png')), `${baseName()}.png`) } },
+    { label: 'SVG vector', hint: 'Sharp at any size, editable', go: () => saveText(exportSvg().svg, 'SVG image', 'svg', 'image/svg+xml') },
+    { label: 'PDF', hint: 'One page, vector', go: async () => { const { svg, W, H } = exportSvg(); if (typeof window.db.saveSvgAsPdf !== 'function') throw new Error('PDF export needs Qubase to be restarted once after this update (close the window and start it again).'); say(await window.db.saveSvgAsPdf(svg, { name: baseName(), width: W, height: H })) } },
+    { label: 'Mermaid', hint: 'For GitHub, GitLab, Notion, Markdown', go: () => saveText(mermaid(), 'Mermaid', 'mmd') },
+    { label: 'DBML', hint: 'For dbdiagram.io / dbdocs', go: () => saveText(dbml(), 'DBML', 'dbml') },
+    { label: 'PlantUML', hint: 'For PlantUML and Confluence', go: () => saveText(plantuml(), 'PlantUML', 'puml') },
+    { label: 'Copy as image', hint: 'PNG to the clipboard', go: async () => { const c = await toPng(2); const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png')); await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); setStatus('Diagram copied as an image') } },
+    { label: 'Copy as Mermaid', hint: 'Text to the clipboard', go: async () => { await navigator.clipboard.writeText(mermaid()); setStatus('Mermaid copied') } }
+  ]
+
+  const relCount = rels.filter((r) => r.to).length
+  const outside = rels.filter((r) => !r.to)
 
   return (
     <div className="er-view">
-      <div className="toolbar">
-        <div className="crumb"><strong>ER diagram</strong> <span className="muted">· {boxes.length} tables · drag tables to move · scroll to zoom · double-click a table to open it</span></div>
+      <div className="toolbar er-toolbar">
+        <div className="crumb"><strong>ER diagram</strong> <span className="muted">· {boxes.length} tables · {relCount} relationships · drag tables or line labels to move them</span></div>
         <div className="spacer" />
+        <input className="er-find" placeholder="Find table…" value={find} onChange={(e) => setFind(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { const b = boxes.find((x) => fullName(x.t).toLowerCase().includes(q)); if (b) focus(b.key) } }} />
         {schemas.length > 1 && (
-          <select value={schema} onChange={(e) => setSchema(e.target.value)}>
+          <select value={schema} onChange={(e) => setSchema(e.target.value)} title="Schema">
             <option value="">All schemas</option>
             {schemas.map((s) => <option key={s}>{s}</option>)}
           </select>
         )}
-        <button className="btn btn-sm" onClick={() => setPos(layout(boxes))}>Rearrange</button>
-        <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(svgRef.current?.outerHTML ?? '')}>Copy SVG</button>
+        <select value={mode} onChange={(e) => changeMode(e.target.value as ColMode)} title="What each table shows">
+          <option value="all">All columns</option>
+          <option value="keys">Key columns only</option>
+          <option value="names">Table names only</option>
+        </select>
+        <label className="check small-text"><input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Labels</label>
+        <div className="er-zoom">
+          <button className="btn btn-sm" onClick={() => zoom(1 / 1.2)} title="Zoom out">−</button>
+          <span className="small-text">{Math.round(view.k * 100)}%</span>
+          <button className="btn btn-sm" onClick={() => zoom(1.2)} title="Zoom in">+</button>
+          <button className="btn btn-sm" onClick={() => fit()} title="Fit all tables on screen">Fit</button>
+        </div>
+        <button className="btn btn-sm" title="Put tables back in the automatic layout and straighten all lines" onClick={() => { const p = layout(boxes, mode); setPos(p); setBend({}); requestAnimationFrame(() => fit(boxes, p)) }}>Rearrange</button>
+        <button className={`btn btn-sm ${panel ? 'btn-on' : ''}`} onClick={() => setPanel((v) => !v)}>Relationships</button>
+        <div className="menu-wrap">
+          <button className="btn btn-sm btn-primary" onClick={() => setMenu((m) => !m)} disabled={!boxes.length}>Export ▾</button>
+          {menu && (
+            <div className="menu er-export">
+              {EXPORTS.map((x) => <button key={x.label} onClick={() => run(x.go)}><strong>{x.label}</strong><span className="muted small-text">{x.hint}</span></button>)}
+            </div>
+          )}
+        </div>
         <button className="icon-btn" title="Reload" onClick={load}><IconRefresh /></button>
       </div>
       {status && <div className="notice">{status}</div>}
       {error && <div className="notice error">{error}</div>}
-      <svg ref={svgRef} className="er-svg" onMouseDown={(e) => onDown(e)} onMouseMove={onMove} onMouseUp={() => { drag.current = null }} onMouseLeave={() => { drag.current = null }} onWheel={onWheel}>
-        <defs>
-          <marker id="er-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" className="er-arrow" /></marker>
-        </defs>
-        <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-          {lines}
-          {boxes.map((b) => {
-            const p = pos[b.key]
-            if (!p) return null
-            const fkCols = new Set(b.s.foreignKeys.flatMap((f) => f.columns))
-            const shown = b.s.columns.slice(0, MAX_COLS)
-            return (
-              <g key={b.key} transform={`translate(${p.x} ${p.y})`} className={`er-box ${hover === b.key ? 'on' : ''}`}
-                onMouseDown={(e) => onDown(e, b.key)} onMouseEnter={() => setHover(b.key)} onMouseLeave={() => setHover('')}
-                onDoubleClick={() => onOpenTable(b.t)}>
-                <rect width={BOX_W} height={height(b)} rx={6} className="er-body" />
-                <rect width={BOX_W} height={HEAD_H} rx={6} className="er-head" />
-                <rect y={HEAD_H - 6} width={BOX_W} height={6} className="er-head" />
-                <text x={10} y={18} className="er-title">{b.t.schema && <tspan className="er-schema">{b.t.schema}.</tspan>}{b.t.name.length > 26 ? b.t.name.slice(0, 25) + '…' : b.t.name}</text>
-                {shown.map((c, i) => (
-                  <g key={c.name} transform={`translate(0 ${HEAD_H + i * ROW_H})`}>
-                    <text x={10} y={14} className={`er-col ${c.primaryKey ? 'pk' : ''}`}>{c.primaryKey ? '🔑 ' : fkCols.has(c.name) ? '↗ ' : ''}{c.name.length > 20 ? c.name.slice(0, 19) + '…' : c.name}</text>
-                    <text x={BOX_W - 10} y={14} textAnchor="end" className="er-type">{c.dataType.length > 14 ? c.dataType.slice(0, 13) + '…' : c.dataType}</text>
-                  </g>
-                ))}
-                {b.s.columns.length > MAX_COLS && <text x={10} y={HEAD_H + MAX_COLS * ROW_H + 14} className="er-type">… {b.s.columns.length - MAX_COLS} more columns</text>}
-              </g>
-            )
-          })}
-        </g>
-      </svg>
+      <div className="er-main">
+        <svg ref={svgRef} className="er-svg" onMouseDown={(e) => onDown(e)} onMouseMove={onMove} onMouseUp={() => { drag.current = null }} onMouseLeave={() => { drag.current = null }} onWheel={onWheel}>
+          <g data-root="" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+            {relEls}
+            {boxes.map((b) => {
+              const p = pos[b.key]
+              if (!p) return null
+              const f = fkCols(b), u = uniqueCols(b)
+              const rows = rowsOf(b)
+              const match = q && fullName(b.t).toLowerCase().includes(q)
+              const nameMax = Math.floor((b.w - PAD_X * 2 - BADGE_W - 60) / NAME_CH)
+              return (
+                <g key={b.key} transform={`translate(${p.x} ${p.y})`} className={`er-box ${hover === b.key ? 'on' : ''} ${match ? 'match' : ''} ${(hover || hoverRel) && hover !== b.key && ![...hot].some((h) => h.startsWith(b.key + '|')) && !rels.some((r) => (r.from === b || r.to === b) && (r.from.key === hover || r.to?.key === hover)) ? 'dim' : ''}`}
+                  onMouseDown={(e) => onDown(e, b.key)} onMouseEnter={() => setHover(b.key)} onMouseLeave={() => setHover('')}
+                  onDoubleClick={() => onOpenTable(b.t)}>
+                  <rect width={b.w} height={height(b)} rx={8} className="er-body" />
+                  <path d={`M 0 8 Q 0 0 8 0 H ${b.w - 8} Q ${b.w} 0 ${b.w} 8 V ${HEAD_H} H 0 Z`} className="er-head" />
+                  <text x={PAD_X} y={22} className="er-title">{b.t.schema && <tspan className="er-schema">{b.t.schema}.</tspan>}{b.t.name}</text>
+                  <text x={b.w - PAD_X} y={22} textAnchor="end" className="er-count">{b.s.columns.length}</text>
+                  <title>{`${fullName(b.t)} · ${b.s.columns.length} columns · double-click to open`}</title>
+                  {rows.map((c, i) => {
+                    const isFk = f.has(c.name)
+                    const tag = c.primaryKey ? 'PK' : isFk ? 'FK' : u.has(c.name) ? 'UQ' : ''
+                    const isHot = hot.has(`${b.key}|${c.name.toLowerCase()}`)
+                    return (
+                      <g key={c.name} transform={`translate(0 ${HEAD_H + i * ROW_H})`} className={isHot ? 'er-row hot' : 'er-row'}>
+                        {i % 2 === 1 && <rect x={1} width={b.w - 2} height={ROW_H} className="er-stripe" />}
+                        {isHot && <rect x={1} width={b.w - 2} height={ROW_H} className="er-hotbg" />}
+                        {tag && <><rect x={PAD_X - 2} y={4} width={22} height={14} rx={3} className={`er-tag ${tag.toLowerCase()}`} /><text x={PAD_X + 9} y={14.5} textAnchor="middle" className="er-tag-text">{tag}</text></>}
+                        <text x={PAD_X + BADGE_W} y={15} className={`er-col ${c.primaryKey ? 'pk' : ''} ${c.nullable ? 'null' : ''}`}>{c.name.length > nameMax ? c.name.slice(0, nameMax - 1) + '…' : c.name}{!c.nullable && !c.primaryKey ? <tspan className="er-req"> *</tspan> : null}</text>
+                        <text x={b.w - PAD_X} y={15} textAnchor="end" className="er-type">{c.dataType.length > 22 ? c.dataType.slice(0, 21) + '…' : c.dataType}{c.nullable ? '?' : ''}</text>
+                        <title>{`${c.name} ${c.dataType}${c.nullable ? ' NULL' : ' NOT NULL'}${c.primaryKey ? ' · primary key' : ''}${isFk ? ' · foreign key' : ''}${c.defaultValue != null ? ` · default ${c.defaultValue}` : ''}${c.autoIncrement ? ' · auto increment' : ''}`}</title>
+                      </g>
+                    )
+                  })}
+                </g>
+              )
+            })}
+          </g>
+        </svg>
+        <div className="er-legend" data-noexport="">
+          <span><b className="er-tag-k pk">PK</b> primary key</span>
+          <span><b className="er-tag-k fk">FK</b> foreign key</span>
+          <span><b className="er-tag-k uq">UQ</b> unique</span>
+          <span><b>*</b> required · <b>?</b> nullable</span>
+          <span><svg width="34" height="14"><path d="M2 7 H32 M10 7 L2 1 M10 7 L2 13 M30 1 V13 M26 1 V13" stroke="currentColor" fill="none" /></svg> many → one</span>
+          <span><svg width="34" height="14"><path d="M2 7 H32" stroke="currentColor" strokeDasharray="4 3" fill="none" /><circle cx="12" cy="7" r="3.5" stroke="currentColor" fill="var(--bg)" /></svg> optional</span>
+        </div>
+        {panel && (
+          <aside className="er-panel">
+            <div className="er-panel-head">Relationships <span className="muted">{rels.length}</span></div>
+            {rels.length === 0 && <p className="muted small-text pad">No foreign keys found in these tables.</p>}
+            <ul>
+              {rels.filter((r) => r.to).map((r) => (
+                <li key={r.id} className={hoverRel === r.id ? 'on' : ''} onMouseEnter={() => setHoverRel(r.id)} onMouseLeave={() => setHoverRel('')} onClick={() => focus(r.from.key)}>
+                  <div className="er-rel-line"><strong>{r.from.t.name}</strong><span className="er-card">{r.one ? '1 : 1' : 'N : 1'}</span><strong>{r.to!.t.name}</strong></div>
+                  <div className="muted small-text mono">{r.fk.columns.join(', ')} → {r.fk.refColumns.join(', ')}</div>
+                  {r.fk.name && <div className="muted small-text">{r.fk.name}{r.optional ? ' · optional' : ''}</div>}
+                </li>
+              ))}
+              {outside.map((r) => (
+                <li key={r.id} className="outside" onClick={() => focus(r.from.key)}>
+                  <div className="er-rel-line"><strong>{r.from.t.name}</strong><span className="er-card">→</span><strong>{r.fk.refSchema ? r.fk.refSchema + '.' : ''}{r.fk.refTable}</strong></div>
+                  <div className="muted small-text">Points to a table outside this diagram</div>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        )}
+      </div>
     </div>
   )
 }

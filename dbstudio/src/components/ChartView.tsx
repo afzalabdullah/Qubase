@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useContext, useMemo, useState } from 'react'
+import { ChartCfg, PinContext } from '../dashboard'
 import type { QueryResult } from '../../shared/types'
 import { cellText } from '../util'
 
@@ -9,15 +10,17 @@ const MAX_POINTS = 500
 const num = (v: unknown) => (v === null || v === undefined || v === '' ? NaN : typeof v === 'number' ? v : Number(v))
 
 /** Quick chart of a result: one label column, one or more number columns. */
-export function ChartView({ result, order }: { result: QueryResult; order: number[] }) {
+export function ChartView({ result, order, initial, compact }: { result: QueryResult; order: number[]; initial?: ChartCfg; compact?: boolean }) {
+  const pin = useContext(PinContext)
+  const [pinned, setPinned] = useState(false)
   const numeric = useMemo(() => result.columns.filter((c) => {
     const sample = order.slice(0, 50).map((i) => result.rows[i][c]).filter((v) => v !== null && v !== undefined)
     return sample.length > 0 && sample.every((v) => Number.isFinite(num(v)))
   }), [result, order])
   const labels = result.columns.filter((c) => !numeric.includes(c))
-  const [kind, setKind] = useState<Kind>('bar')
-  const [x, setX] = useState(labels[0] ?? result.columns[0])
-  const [ys, setYs] = useState<string[]>(numeric.filter((c) => c !== x).slice(0, 1))
+  const [kind, setKind] = useState<Kind>(initial?.kind ?? 'bar')
+  const [x, setX] = useState(initial?.x && result.columns.includes(initial.x) ? initial.x : labels[0] ?? result.columns[0])
+  const [ys, setYs] = useState<string[]>(initial?.ys ?? numeric.filter((c) => c !== x).slice(0, 1))
 
   const rows = order.slice(0, MAX_POINTS).map((i) => result.rows[i])
   const series = ys.filter((c) => result.columns.includes(c))
@@ -95,8 +98,8 @@ export function ChartView({ result, order }: { result: QueryResult; order: numbe
   }
 
   return (
-    <div className="chart-view">
-      <div className="chart-bar">
+    <div className={`chart-view ${compact ? 'compact' : ''}`}>
+      {!compact && <div className="chart-bar">
         {(['bar', 'line', 'pie'] as Kind[]).map((k) => <button key={k} className={`btn btn-sm ${kind === k ? 'btn-on' : ''}`} onClick={() => setKind(k)}>{k[0].toUpperCase() + k.slice(1)}</button>)}
         <label>Label <select value={x} onChange={(e) => setX(e.target.value)}>{result.columns.map((c) => <option key={c}>{c}</option>)}</select></label>
         <span className="muted small-text">Values</span>
@@ -105,7 +108,9 @@ export function ChartView({ result, order }: { result: QueryResult; order: numbe
             onChange={(e) => setYs((cur) => kind === 'pie' ? [c] : e.target.checked ? [...cur, c] : cur.filter((y) => y !== c))} />{c}</label>
         ))}
         {order.length > MAX_POINTS && <span className="muted small-text">First {MAX_POINTS} rows</span>}
-      </div>
+        {pin && <><span className="spacer" /><button className="btn btn-sm" disabled={!series.length} title="Add this chart to the dashboard; it re-runs the query on each refresh"
+          onClick={() => { pin({ kind, x, ys: series }); setPinned(true); setTimeout(() => setPinned(false), 1800) }}>{pinned ? '✓ Pinned' : '📌 Pin to dashboard'}</button></>}
+      </div>}
       <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" preserveAspectRatio="xMidYMid meet">{chart()}</svg>
     </div>
   )
