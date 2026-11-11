@@ -9,6 +9,7 @@ import type { ExplainResult, QueryResult, TableInfo } from '../../shared/types'
 import { ResultView } from './ResultView'
 import { EditableResult } from './EditableResult'
 import { addTile, PinContext } from '../dashboard'
+import { toast } from 'sonner'
 import { joinSource, valueSource } from '../smartComplete'
 import type { ForeignKeyInfo } from '../../shared/types'
 import { PlanView } from './PlanView'
@@ -160,7 +161,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
   const [run, setRun] = useState<Run | null>(null)
   // Pin a chart: only when the run was a single statement we can re-run
   const pinFn = run?.sql && run.results.length === 1 && language === 'sql'
-    ? (chart: import('../dashboard').ChartCfg) => { addTile(conn.id, { title: title === 'Query' || /^Query \d+$/.test(title) ? chart.ys.join(', ') + ' by ' + chart.x : title, sql: run.sql!, chart }); onStatus('Pinned to the dashboard') }
+    ? (chart: import('../dashboard').ChartCfg) => { addTile(conn.id, { title: title === 'Query' || /^Query \d+$/.test(title) ? chart.ys.join(', ') + ' by ' + chart.x : title, sql: run.sql!, chart }); onStatus('Pinned to the dashboard'); toast.success('Pinned to the dashboard', { description: 'Open it from the Dashboard icon on the left.' }) }
     : null
   const [plan, setPlan] = useState<ExplainResult | null>(null)
   const [activeResult, setActiveResult] = useState<number | 'messages' | 'plan'>(0)

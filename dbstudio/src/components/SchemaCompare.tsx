@@ -11,6 +11,7 @@ import { Combo, useTargetCatalog } from './Combo'
 import { errMsg } from '../util'
 import { allowRun, checkSql } from '../safety'
 import { useConn } from '../settings'
+import { toast } from 'sonner'
 import { deleteSnapshot, listSnapshots, saveSnapshot, Snapshot, takeSnapshot } from '../snapshots'
 
 interface Diff {
@@ -100,7 +101,7 @@ export function SchemaCompare({ dark, onStatus }: { dark: boolean; onStatus: (s:
       const name = snapName.trim() || `Snapshot ${new Date().toLocaleString()}`
       const sn = await takeSnapshot(connId, name, engine, conn.name || '', (d, t) => setBusy(`Snapshot: ${d} / ${t} tables`))
       setSnaps(saveSnapshot(conn.id, sn)); setSnapName('')
-      onStatus(`Snapshot “${name}” saved (${sn.tables.length} tables)`)
+      onStatus(`Snapshot “${name}” saved (${sn.tables.length} tables)`); toast.success(`Snapshot “${name}” saved`, { description: `${sn.tables.length} tables` })
     } catch (e) { setError(errMsg(e)) } finally { setBusy('') }
   }
   const exportSnap = async (sn: Snapshot) => {

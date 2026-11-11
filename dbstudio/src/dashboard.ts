@@ -1,7 +1,8 @@
 // Dashboard tiles: saved queries with a chart setup, kept per connection.
 import { createContext } from 'react'
 
-export interface ChartCfg { kind: 'bar' | 'line' | 'pie'; x: string; ys: string[] }
+export type ChartKind = 'bar' | 'hbar' | 'stacked' | 'line' | 'area' | 'scatter' | 'pie' | 'donut'
+export interface ChartCfg { kind: ChartKind; x: string; ys: string[] }
 export interface Tile { id: string; title: string; sql: string; chart: ChartCfg; wide?: boolean }
 
 const key = (connId: string) => `dashboard:${connId}`

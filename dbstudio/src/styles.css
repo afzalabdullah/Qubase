@@ -1153,3 +1153,46 @@ button, input, select, textarea { font-family: inherit; }
 .ws-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-view.compact .chart-text { font-size: 20px; }
 .chart-view.compact .chart-svg { min-height: 200px; }
+
+/* Guided tour (driver.js), in the app's colours */
+.driver-popover.qb-tour { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 50px rgba(0,0,0,.28); max-width: 340px; padding: 16px 18px 14px; font-family: var(--ui-font, inherit); }
+.qb-tour .driver-popover-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.qb-tour .driver-popover-description { font-size: 13px; line-height: 1.55; color: var(--text-2); margin-top: 6px; }
+.qb-tour .driver-popover-progress-text { color: var(--text-3); font-size: 11.5px; }
+.qb-tour .driver-popover-footer button { text-shadow: none; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--text); font: 600 12px/1 var(--ui-font, inherit); padding: 7px 12px; }
+.qb-tour .driver-popover-next-btn { background: var(--accent) !important; border-color: var(--accent) !important; color: #fff !important; }
+.qb-tour .driver-popover-close-btn { color: var(--text-3); }
+.qb-tour .driver-popover-arrow-side-left.driver-popover-arrow { border-left-color: var(--bg); }
+.qb-tour .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: var(--bg); }
+.qb-tour .driver-popover-arrow-side-top.driver-popover-arrow { border-top-color: var(--bg); }
+.qb-tour .driver-popover-arrow-side-bottom.driver-popover-arrow { border-bottom-color: var(--bg); }
+.chart-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chart-canvas { flex: 1; min-height: 320px; width: 100%; }
+.chart-view.compact .chart-canvas { min-height: 210px; }
+
+/* Toasts (Sonner) */
+[data-sonner-toaster] { --font: var(--ui-font, inherit); }
+.qb-toast { font-family: var(--ui-font, inherit) !important; border-radius: var(--radius, 8px) !important; }
+.chart-bar select { height: 28px; padding: 2px 24px 2px 8px; line-height: 1.2; font-size: 12.5px; min-width: 110px; }
+.qb-tour .driver-popover-close-btn:focus { outline: none; }
+
+/* ER export progress */
+.er-view { position: relative; }
+.er-busy { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(3px); animation: er-fade .18s ease-out; }
+@keyframes er-fade { from { opacity: 0 } to { opacity: 1 } }
+.er-busy-card { width: 340px; padding: 22px 24px 18px; border-radius: 14px; background: var(--bg); border: 1px solid var(--border); box-shadow: 0 20px 60px rgba(0,0,0,.22); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+.er-busy-card strong { font-size: 14.5px; }
+/* Four little tables linking up, drawn with transforms only so it keeps moving while the app is busy */
+.er-busy-anim { position: relative; width: 84px; height: 56px; margin-bottom: 6px; }
+.er-busy-anim span { position: absolute; width: 28px; height: 20px; border-radius: 4px; border: 2px solid var(--accent); background: var(--bg-2); animation: er-hop 1.6s cubic-bezier(.6,0,.4,1) infinite; }
+.er-busy-anim span::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 2px; background: var(--accent); opacity: .5; }
+.er-busy-anim span:nth-child(1) { left: 0; top: 0; }
+.er-busy-anim span:nth-child(2) { right: 0; top: 0; animation-delay: .2s; }
+.er-busy-anim span:nth-child(3) { right: 0; bottom: 0; animation-delay: .4s; }
+.er-busy-anim span:nth-child(4) { left: 0; bottom: 0; animation-delay: .6s; }
+@keyframes er-hop { 0%, 60%, 100% { transform: translateY(0) scale(1); opacity: .55 } 25% { transform: translateY(-5px) scale(1.08); opacity: 1 } }
+.er-busy-bar { width: 100%; height: 6px; border-radius: 99px; background: var(--bg-3, var(--border)); overflow: hidden; margin-top: 4px; }
+.er-busy-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #fff)); background-size: 200% 100%; transition: width .25s ease; animation: er-shine 1.2s linear infinite; }
+@keyframes er-shine { from { background-position: 200% 0 } to { background-position: 0 0 } }
+.er-busy-pct { font: 600 11.5px var(--mono); color: var(--text-3); }
+@media (prefers-reduced-motion: reduce) { .er-busy-anim span, .er-busy-bar i { animation: none; } }

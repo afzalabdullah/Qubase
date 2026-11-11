@@ -5,7 +5,7 @@ import { errMsg } from '../util'
 import { useConn } from '../settings'
 
 const HEAD_H = 34, ROW_H = 22, PAD_X = 12, GAP_X = 230, GAP_Y = 70, MIN_W = 190, MAX_W = 420
-const MAX_TABLES = 200
+const MAX_TABLES = 1000
 const NAME_CH = 7.2, TYPE_CH = 6.7, BADGE_W = 24
 
 type ColMode = 'all' | 'keys' | 'names'
@@ -35,6 +35,8 @@ function widthOf(t: TableInfo, s: TableStructure) {
 }
 
 /** Entity-relationship diagram: every column, labelled relationships with crow's-foot ends, export to images and text formats. */
+class Cancelled extends Error {}
+
 export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void }) {
   const { connId, conn } = useConn()
   const [bend, setBend] = useState<Record<string, { dx: number; dy: number }>>({})
@@ -46,6 +48,9 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
   const [schemas, setSchemas] = useState<string[]>([])
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState<{ label: string; step: string; pct: number; load?: boolean } | null>(null)
+  const cancelRef = useRef(false)
+  const step = (text: string, pct: number) => setBusy((b) => (b ? { ...b, step: text, pct: Math.max(b.pct, pct) } : b))
   const [hover, setHover] = useState('')
   const [hoverRel, setHoverRel] = useState('')
   const [mode, setMode] = useState<ColMode>('all')
@@ -57,6 +62,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
 
   const load = async () => {
     setError(''); setStatus('Loading tables…')
+    setBusy({ label: 'Loading the diagram', step: 'Listing tables', pct: 0.03, load: true })
     try {
       const all = (await window.db.listTables(connId)).filter((t) => t.type !== 'view')
       setSchemas([...new Set(all.map((t) => t.schema ?? ''))].filter(Boolean))
@@ -64,9 +70,13 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
       let done = 0
       const structs = await pool(picked, 6, async (t) => {
         const s = await window.db.getStructure(connId, t).catch(() => ({ columns: [], indexes: [], foreignKeys: [], triggers: [] }))
-        setStatus(`Reading structure ${++done} / ${picked.length}…`)
+        ++done
+        setStatus(`Reading structure ${done} / ${picked.length}…`)
+        if (picked.length > 20) setBusy((b) => b && { ...b, step: `Reading table ${done.toLocaleString()} of ${picked.length.toLocaleString()}`, pct: 0.05 + 0.85 * done / picked.length })
         return s
       })
+      setBusy((b) => b && { ...b, step: 'Laying out tables and relationships', pct: 0.93 })
+      await new Promise((r) => setTimeout(r, 30))
       const list = picked.map((t, i) => ({ t, s: structs[i], key: keyOf(t), w: widthOf(t, structs[i]) }))
       setBoxes(list)
       let p = layout(list, mode)
@@ -78,7 +88,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
       setPos(p)
       requestAnimationFrame(() => fit(list, p, mode))
       setStatus(all.length > picked.length && !schema ? `Showing the first ${MAX_TABLES} of ${all.length} tables; pick a schema to narrow it down.` : '')
-    } catch (e) { setError(errMsg(e)); setStatus('') }
+    } catch (e) { setError(errMsg(e)); setStatus('') } finally { setTimeout(() => setBusy((b) => (b?.load ? null : b)), 120) }
   }
   useEffect(() => { load() }, [connId, schema]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -259,17 +269,33 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
   // ---- export ----
   const baseName = () => `er-diagram${schema ? '-' + schema : ''}`
   /** Stand-alone SVG with real colours (no CSS variables) cropped to the tables */
-  const exportSvg = () => {
+  const exportSvg = async () => {
     const src = svgRef.current!
     const clone = src.cloneNode(true) as SVGSVGElement
     const a = [src, ...src.querySelectorAll('*')] as Element[]
     const b = [clone, ...clone.querySelectorAll('*')] as Element[]
     const props = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity', 'font-size', 'font-weight', 'font-family', 'font-style']
-    a.forEach((el, i) => {
-      const cs = getComputedStyle(el)
-      b[i].setAttribute('style', props.map((p) => `${p}:${cs.getPropertyValue(p)}`).join(';'))
-      b[i].removeAttribute('class')
-    })
+    // Copy real colours in batches so the window stays responsive (500+ tables = tens of thousands of shapes)
+    const BATCH = 1200
+    const seen = new Map<Element, Record<string, string>>()
+    for (let i = 0; i < a.length; i += BATCH) {
+      if (cancelRef.current) throw new Cancelled()
+      for (let j = i; j < Math.min(a.length, i + BATCH); j++) {
+        const cs = getComputedStyle(a[j])
+        const isText = a[j].tagName === 'text' || a[j].tagName === 'tspan'
+        const mine: Record<string, string> = {}
+        for (const p of props) mine[p] = cs.getPropertyValue(p)
+        seen.set(a[j], mine)
+        const parent = j ? seen.get(a[j].parentElement!) : undefined
+        // Text gets its fonts written out; inherited paint values only when they differ from the parent's; opacity only when not 1
+        const css = props.filter((p) => (p.startsWith('font') ? isText : p === 'opacity' ? mine[p] !== '1' : !parent || parent[p] !== mine[p]))
+          .map((p) => `${p}:${mine[p]}`).join(';')
+        if (css) b[j].setAttribute('style', css); else b[j].removeAttribute('style')
+        b[j].removeAttribute('class')
+      }
+      step('Copying colours and fonts', Math.min(a.length, i + BATCH) / a.length * 0.6)
+      await new Promise((r) => setTimeout(r, 0))
+    }
     clone.querySelectorAll('[data-noexport]').forEach((n) => n.remove())
     const pad = 30, bb = bounds()
     const g = clone.querySelector('g[data-root]')!
@@ -284,13 +310,18 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     return { svg: new XMLSerializer().serializeToString(clone), W, H }
   }
   const toPng = async (scale = 2) => {
-    const { svg, W, H } = exportSvg()
+    const { svg, W, H } = await exportSvg()
+    step('Drawing the image', 0.7)
     const img = new Image()
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg) // the page only allows data: images
     await img.decode()
-    const k = Math.min(scale, 16000 / Math.max(W, H))
+    if (cancelRef.current) throw new Cancelled()
+    // Canvas limits: 16k px per side and about 250M pixels in total
+    const k = Math.min(scale, 16000 / Math.max(W, H), Math.sqrt(250e6 / (W * H)))
     const c = document.createElement('canvas'); c.width = Math.round(W * k); c.height = Math.round(H * k)
     const ctx = c.getContext('2d')!; ctx.scale(k, k); ctx.drawImage(img, 0, 0)
+    step('Encoding PNG', 0.85)
+    await new Promise((r) => setTimeout(r, 0))
     return c
   }
   const say = (p: string | null) => { if (p) setStatus(`Saved to ${p}`) }
@@ -304,7 +335,18 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     if (typeof window.db.saveTextFile === 'function') say(await window.db.saveTextFile(text, { name: baseName(), filter, ext }))
     else download(new Blob([text], { type: mime }), `${baseName()}.${ext}`)
   }
-  const run = async (f: () => Promise<void>) => { setMenu(false); setError(''); setStatus(''); setHover(''); setHoverRel(''); await new Promise((r) => setTimeout(r, 60)); try { await f() } catch (e) { setError(`Export failed: ${errMsg(e)}`) } }
+  const run = async (label: string, f: () => Promise<void>) => {
+    setMenu(false); setError(''); setStatus(''); setHover(''); setHoverRel('')
+    cancelRef.current = false
+    setBusy({ label: `Exporting ${label}`, step: 'Getting ready', pct: 0.02 })
+    await new Promise((r) => setTimeout(r, 80)) // let the overlay paint first
+    try { await f() } catch (e) { if (e instanceof Cancelled) setStatus('Export cancelled'); else setError(`Export failed: ${errMsg(e)}`) } finally { setBusy(null) }
+  }
+  const pngBase64 = async (c: HTMLCanvasElement) => {
+    const blob = await new Promise<Blob>((r, j) => c.toBlob((b) => (b ? r(b) : j(new Error('The image is too large to encode'))), 'image/png'))
+    step('Saving the file', 0.95)
+    return await new Promise<string>((r) => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob) })
+  }
 
   const ident = (s: string) => s.replace(/[^\w]/g, '_')
   const mermaid = () => [
@@ -331,9 +373,9 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
   ].join('\n') + '\n'
 
   const EXPORTS: { label: string; hint: string; go: () => Promise<void> }[] = [
-    { label: 'PNG image', hint: 'High resolution, for documents and chat', go: async () => { const c = await toPng(2); if (typeof window.db.saveBinaryFile === 'function') say(await window.db.saveBinaryFile(c.toDataURL('image/png').split(',')[1], { name: baseName(), filter: 'PNG image', ext: 'png' })); else download(await new Promise<Blob>((r) => c.toBlob((b) => r(b!), 'image/png')), `${baseName()}.png`) } },
-    { label: 'SVG vector', hint: 'Sharp at any size, editable', go: () => saveText(exportSvg().svg, 'SVG image', 'svg', 'image/svg+xml') },
-    { label: 'PDF', hint: 'One page, vector', go: async () => { const { svg, W, H } = exportSvg(); if (typeof window.db.saveSvgAsPdf !== 'function') throw new Error('PDF export needs Qubase to be restarted once after this update (close the window and start it again).'); say(await window.db.saveSvgAsPdf(svg, { name: baseName(), width: W, height: H })) } },
+    { label: 'PNG image', hint: 'High resolution, for documents and chat', go: async () => { const c = await toPng(2); if (typeof window.db.saveBinaryFile === 'function') { const b64 = await pngBase64(c); step('Saving the file', 0.97); say(await window.db.saveBinaryFile(b64, { name: baseName(), filter: 'PNG image', ext: 'png' })) } else download(await new Promise<Blob>((r) => c.toBlob((b) => r(b!), 'image/png')), `${baseName()}.png`) } },
+    { label: 'SVG vector', hint: 'Sharp at any size, editable', go: async () => { const { svg } = await exportSvg(); step('Saving the file', 0.9); await saveText(svg, 'SVG image', 'svg', 'image/svg+xml') } },
+    { label: 'PDF', hint: 'One page, vector', go: async () => { const { svg, W, H } = await exportSvg(); step('Building the PDF', 0.8); if (typeof window.db.saveSvgAsPdf !== 'function') throw new Error('PDF export needs Qubase to be restarted once after this update (close the window and start it again).'); say(await window.db.saveSvgAsPdf(svg, { name: baseName(), width: W, height: H })) } },
     { label: 'Mermaid', hint: 'For GitHub, GitLab, Notion, Markdown', go: () => saveText(mermaid(), 'Mermaid', 'mmd') },
     { label: 'DBML', hint: 'For dbdiagram.io / dbdocs', go: () => saveText(dbml(), 'DBML', 'dbml') },
     { label: 'PlantUML', hint: 'For PlantUML and Confluence', go: () => saveText(plantuml(), 'PlantUML', 'puml') },
@@ -345,7 +387,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
   const outside = rels.filter((r) => !r.to)
 
   return (
-    <div className="er-view">
+    <div className="er-view" aria-busy={!!busy}>
       <div className="toolbar er-toolbar">
         <div className="crumb"><strong>ER diagram</strong> <span className="muted">· {boxes.length} tables · {relCount} relationships · drag tables or line labels to move them</span></div>
         <div className="spacer" />
@@ -375,7 +417,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
           <button className="btn btn-sm btn-primary" onClick={() => setMenu((m) => !m)} disabled={!boxes.length}>Export ▾</button>
           {menu && (
             <div className="menu er-export">
-              {EXPORTS.map((x) => <button key={x.label} onClick={() => run(x.go)}><strong>{x.label}</strong><span className="muted small-text">{x.hint}</span></button>)}
+              {EXPORTS.map((x) => <button key={x.label} onClick={() => run(x.label, x.go)}><strong>{x.label}</strong><span className="muted small-text">{x.hint}</span></button>)}
             </div>
           )}
         </div>
@@ -383,6 +425,20 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
       </div>
       {status && <div className="notice">{status}</div>}
       {error && <div className="notice error">{error}</div>}
+      {busy && (
+        <div className="er-busy" role="status" aria-live="polite">
+          <div className="er-busy-card">
+            <div className="er-busy-anim" aria-hidden="true">
+              <span /><span /><span /><span />
+            </div>
+            <strong>{busy.label}</strong>
+            <span className="muted small-text">{busy.step}…{!busy.load && ` ${boxes.length.toLocaleString()} tables, ${rels.length.toLocaleString()} relationships`}</span>
+            <div className="er-busy-bar"><i style={{ width: `${Math.round(busy.pct * 100)}%` }} /></div>
+            <span className="er-busy-pct">{Math.round(busy.pct * 100)}%</span>
+            {!busy.load && <button className="btn btn-sm" onClick={() => { cancelRef.current = true; step('Cancelling', busy.pct) }}>Cancel</button>}
+          </div>
+        </div>
+      )}
       <div className="er-main">
         <svg ref={svgRef} className="er-svg" onMouseDown={(e) => onDown(e)} onMouseMove={onMove} onMouseUp={() => { drag.current = null }} onMouseLeave={() => { drag.current = null }} onWheel={onWheel}>
           <g data-root="" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>

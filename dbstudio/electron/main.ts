@@ -322,13 +322,20 @@ ipcMain.handle('file:svgPdf', async (e, svg: string, o: { name: string; width: n
   if (r.canceled || !r.filePath) return null
   // Draw the SVG in a hidden window (no scripts, no network) and print it to one page of exactly its size
   const w = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true } })
+  let tmp = ''
   try {
-    const html = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${o.width}px ${o.height}px;margin:0}html,body{margin:0}</style></head><body>${svg}</body></html>`
-    await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-    const pdf = await w.webContents.printToPDF({ printBackground: true, margins: { marginType: 'none' }, pageSize: { width: o.width / 96, height: o.height / 96 }, preferCSSPageSize: true })
+    // PDF pages top out at 200 inches; shrink very large diagrams to fit (it's vector, so it stays sharp)
+    const k = Math.min(1, 19000 / Math.max(o.width, o.height))
+    const W = Math.ceil(o.width * k), H = Math.ceil(o.height * k)
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${W}px ${H}px;margin:0}html,body{margin:0}body>svg{width:${W}px;height:${H}px;display:block}</style></head><body>${svg}</body></html>`
+    // Big diagrams are several MB, over Chromium's 2 MB URL limit, so load from a temp file instead of a data: URL
+    tmp = path.join(app.getPath('temp'), `qubase-pdf-${randomUUID()}.html`)
+    await fs.promises.writeFile(tmp, html, 'utf8')
+    await w.loadFile(tmp)
+    const pdf = await w.webContents.printToPDF({ printBackground: true, margins: { marginType: 'none' }, pageSize: { width: W / 96, height: H / 96 }, preferCSSPageSize: true })
     await fs.promises.writeFile(r.filePath, pdf)
     return r.filePath
-  } finally { w.destroy() }
+  } finally { w.destroy(); if (tmp) fs.promises.unlink(tmp).catch(() => {}) }
 })
 ipcMain.handle('file:openText', async (e, o: { filter: string; ext: string }) => {
   const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, { properties: ['openFile'], filters: [{ name: o.filter, extensions: [o.ext] }, { name: 'All files', extensions: ['*'] }] })

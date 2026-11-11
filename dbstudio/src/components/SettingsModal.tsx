@@ -6,6 +6,7 @@ import { BUILT_IN_SNIPPETS, readHiddenSnippets, readUserSnippets, Snippet, write
 import { ACTIONS, comboFromEvent, conflicts, keyCaps, normalise, RESERVED, SHORTCUT_GROUPS, SHORTCUTS, ShortcutAction } from '../shortcuts'
 import { errMsg } from '../util'
 import { readSavedQueries, saveQuery } from '../saved'
+import { toast } from 'sonner'
 import type { LicenceInfo } from '../../shared/types'
 
 const MODELS = [
@@ -222,7 +223,7 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   const exportAll = async () => {
     const data = { app: 'qubase', kind: 'settings', version: 1, exported: new Date().toISOString(), settings: s, snippets: userSnips, hiddenSnippets: hidden, savedQueries: readSavedQueries() }
     const p = await window.db.saveTextFile(JSON.stringify(data, null, 2), { name: 'qubase-settings', filter: 'Qubase settings', ext: 'json' })
-    if (p) setInfo(`Exported to ${p}`)
+    if (p) { setInfo(`Exported to ${p}`); toast.success('Settings exported', { description: p }) }
   }
   const importAll = async () => {
     setError(''); setInfo('')

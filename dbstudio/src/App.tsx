@@ -5,6 +5,7 @@ import { ConnectionScreen } from './components/ConnectionScreen'
 import { Sidebar, TableView } from './components/Sidebar'
 import { TableDesigner } from './components/TableDesigner'
 import { QueryTab } from './components/QueryTab'
+import { startTour, tourSeen } from './tour'
 import { Dashboard } from './components/Dashboard'
 import { Workspace, WorkspacesModal, WsTab } from './components/Workspaces'
 import { TableTab } from './components/TableTab'
@@ -19,7 +20,8 @@ import { Notebook } from './components/Notebook'
 import { QueryBuilder } from './components/QueryBuilder'
 import { FindInDb } from './components/FindInDb'
 import { Schedules } from './components/Schedules'
-import { IconBook, IconBuilder, IconCode, IconCompare, IconDiagram, IconGear, IconMoon, IconPlus, IconSearch, IconServer, IconSidebar, IconKeyboard, IconClock, IconDatabase, IconSun, IconTable, IconX, IconUsers, IconJobs, IconBackup, IconActivity, IconRows, IconUpload, IconChart, IconLayers } from './components/Icons'
+import { IconBook, IconBuilder, IconCode, IconCompare, IconDiagram, IconGear, IconMoon, IconPlus, IconSearch, IconServer, IconSidebar, IconKeyboard, IconClock, IconDatabase, IconSun, IconTable, IconX, IconUsers, IconJobs, IconBackup, IconActivity, IconRows, IconUpload, IconChart, IconLayers, IconLayoutDashboard, IconCompass } from './components/Icons'
+import { Toaster, toast } from 'sonner'
 import { driverFor, queryLanguage } from '../shared/drivers'
 import { applySettings, ConnContext, readSettings, resolvedTheme, shortcutFor, useSettings, writeSettings } from './settings'
 import { ACTIONS, EDITOR_ACTIONS, matches, ShortcutAction } from './shortcuts'
@@ -165,6 +167,14 @@ export function App() {
   const engine = cfg ? driverFor(cfg.kind).engine : ''
   const connValue = useMemo(() => session && { conn: session.conn, engine, connId: session.id }, [session, engine])
 
+  // First time on the main screen: show the guided tour once
+  const sessionId = session?.id
+  useEffect(() => {
+    if (!sessionId || tourSeen()) return
+    const h = setTimeout(() => startTour({ sqlLike: !!cfg && queryLanguage(cfg.kind) === 'sql', paletteKey: shortcutFor(settings, 'palette') }), 900)
+    return () => clearTimeout(h)
+  }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!session || !cfg || !connValue) {
     return (
       <>
@@ -282,7 +292,7 @@ export function App() {
   }
   const restoreWorkspace = (w: Workspace, replace: boolean) => {
     if (replace && tabsRef.current.some((t) => dirtyRef.current[t.key])) {
-      setStatus((st) => ({ ...st, [active]: 'Save or close the unsaved tabs first (or use Add)' })); return
+      toast.warning('Some tabs have unsaved changes', { description: 'Save or close them first, or use Add to open the workspace next to them.' }); return
     }
     const fresh: Tab[] = w.tabs.map((t) => {
       let key: string
@@ -299,7 +309,7 @@ export function App() {
       return [...base, ...fresh.filter((f) => !base.some((b) => b.key === f.key))]
     })
     setActive(fresh[w.active]?.key ?? fresh[0]?.key ?? '')
-    setStatus((st) => ({ ...st, [fresh[0]?.key ?? active]: `Opened workspace “${w.name}”` }))
+    toast.success(`Opened workspace “${w.name}”`, { description: `${fresh.length} tabs` })
   }
   const renameTab = (key: string) => (title: string) => setTabs((l) => l.map((x) => (x.key === key ? { ...x, title } : x)))
   const cycleTab = (dir: 1 | -1) => {
@@ -364,6 +374,7 @@ export function App() {
     { id: 'workspaces', label: 'Workspaces: save or open a set of tabs', run: () => setWsOpen(true) },
     { id: 'schedules', label: 'Scheduled queries and exports', hint: hint('schedules'), run: openSchedules },
     { id: 'settings', label: 'Settings', hint: hint('settings'), run: () => openSettings() },
+    { id: 'tour', label: 'Take the guided tour', run: () => setTimeout(() => startTour({ sqlLike, paletteKey: shortcutFor(settings, 'palette') }), 150) },
     { id: 'shortcuts', label: 'Keyboard shortcuts (list)', hint: hint('shortcutsHelp'), run: () => setHelpOpen(true) },
     { id: 'shortcuts-edit', label: 'Change keyboard shortcuts', run: () => openSettings('shortcuts') },
     { id: 'theme', label: `Switch to ${dark ? 'light' : 'dark'} theme`, hint: hint('toggleTheme'), run: toggleTheme },
@@ -410,10 +421,11 @@ export function App() {
                 {item('Data compare', <IconCompare />, kind === 'datacompare' || kind === 'compare', openDataCompare, 'dataCompare', sqlLike)}
                 {item('ER diagram', <IconDiagram />, kind === 'er', openEr, 'erDiagram', sqlLike)}
                 {item('Scheduled queries', <IconClock />, kind === 'schedules', openSchedules, 'schedules')}
-                {item('Dashboard', <IconChart />, kind === 'dashboard', openDashboard)}
+                {item('Dashboard', <IconLayoutDashboard />, kind === 'dashboard', openDashboard)}
                 {item('Workspaces', <IconLayers />, wsOpen, () => setWsOpen(true))}
                 {item('Server tools', <IconServer />, kind === 'tools', () => openTools(sqlLike ? 'activity' : 'backup'))}
                 <div className="rail-spacer" />
+                {item('Guided tour', <IconCompass />, false, () => startTour({ sqlLike, paletteKey: shortcutFor(settings, 'palette') }))}
                 {item('Keyboard shortcuts', <IconKeyboard />, helpOpen, () => setHelpOpen(true), 'shortcutsHelp')}
                 {item(dark ? 'Light theme' : 'Dark theme', dark ? <IconSun /> : <IconMoon />, false, toggleTheme, 'toggleTheme')}
                 {item('Settings', <IconGear />, settingsOpen, () => openSettings(), 'settings')}
@@ -473,7 +485,7 @@ export function App() {
                       {sqlLike && <button onClick={openSearch}><IconSearch width={14} height={14} /> Find in database</button>}
                       {sqlLike && session.canEdit && <button onClick={() => setImportNew(true)}><IconUpload width={14} height={14} /> Import file to new table</button>}
                       <button onClick={openSchedules}><IconClock width={14} height={14} /> Scheduled queries</button>
-                      <button onClick={openDashboard}><IconChart width={14} height={14} /> Dashboard</button>
+                      <button onClick={openDashboard}><IconLayoutDashboard width={14} height={14} /> Dashboard</button>
                       <button onClick={() => setWsOpen(true)}><IconLayers width={14} height={14} /> Workspaces</button>
                       {sqlLike && <button onClick={() => openTools('activity')}><IconActivity width={14} height={14} /> Activity monitor</button>}
                       {sqlLike && <button onClick={() => openTools('users')}><IconUsers width={14} height={14} /> Users and roles</button>}
@@ -494,7 +506,7 @@ export function App() {
             )}
             <div className="panes">
             {tabs.map((t) => (
-              <div key={t.key} className={`tabpanel ${showSide && t.key === side ? 'side-pane' : ''}`} style={{ display: t.key === active || (showSide && t.key === side) ? 'flex' : 'none', order: t.key === active ? 0 : 1 }}>
+              <div key={t.key} className={`tabpanel ${t.key === active ? 'active' : ''} ${showSide && t.key === side ? 'side-pane' : ''}`} style={{ display: t.key === active || (showSide && t.key === side) ? 'flex' : 'none', order: t.key === active ? 0 : 1 }}>
                 {showSide && t.key === side && <div className="side-head"><span>{t.title}</span><span className="spacer" /><button className="btn btn-sm" onClick={() => setActive(t.key)} title="Make this the main tab">Focus</button><button className="icon-btn" onClick={() => setSide('')} title="Close split"><IconX width={12} height={12} /></button></div>}
                 {t.kind === 'query' && (
                   <QueryTab connId={session.id} database={cfg.database} dark={dark} language={queryLanguage(cfg.kind)} dialect={engine}
@@ -592,6 +604,7 @@ export function App() {
         {settingsOpen && <SettingsModal section={settingsAt} onClose={() => setSettingsOpen(false)} onSaved={() => {}} />}
         {helpOpen && <ShortcutsHelp settings={settings} onClose={() => setHelpOpen(false)} onEdit={() => { setHelpOpen(false); openSettings('shortcuts') }} />}
         {wsOpen && <WorkspacesModal connId={session.conn.id} current={snapshotTabs} onOpen={restoreWorkspace} onClose={() => setWsOpen(false)} />}
+        <Toaster theme={dark ? 'dark' : 'light'} position="bottom-right" richColors closeButton duration={3500} offset={36} toastOptions={{ className: 'qb-toast' }} />
         {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       </div>
     </ConnContext.Provider>
