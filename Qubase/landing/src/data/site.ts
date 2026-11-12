@@ -1,5 +1,5 @@
-/** Where every Download button points. Replace with the installer link. */
-export const DOWNLOAD_URL = '#download'
+/** Where every Download button points: the installer attached to the latest GitHub release. */
+export const DOWNLOAD_URL = 'https://github.com/afzalabdullah/Qubase/releases/latest/download/Qubase-Setup-0.1.0.exe'
 
 export const AUTHOR = {
   name: 'Abdullah Afzal',
