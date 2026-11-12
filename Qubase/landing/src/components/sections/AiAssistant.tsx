@@ -2,7 +2,7 @@ import { AI_POINTS, AI_PROVIDERS } from '../../data/ai'
 import { AiChat } from '../mocks/AiChat'
 
 export function AiAssistant() {
-  const providers = AI_PROVIDERS.slice(0, -1).join(', ') + ' or ' + AI_PROVIDERS.at(-1)
+  const providers = AI_PROVIDERS.slice(0, -1).join(', ') + ' or ' + AI_PROVIDERS[AI_PROVIDERS.length - 1]
   return (
     <section id="ai" className="scroll-mt-24 border-y border-line bg-surface">
       <div className="mx-auto grid max-w-6xl gap-14 px-4 py-20 sm:px-6 sm:py-28 lg:grid-cols-2 lg:items-center">
