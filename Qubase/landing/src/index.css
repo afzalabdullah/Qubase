@@ -2,56 +2,58 @@
 
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
-:root, :root[data-theme="dark"] {
-  color-scheme: dark;
-  --ink: #1d1f23; --ink-2: #24272c; --ink-3: #16181b;
-  --fg: #eceef1; --mute: #8b9099; --soft: #aeb3bc;
-  --grid-line: #ffffff07; --glow-a: #ff8a3d33; --glow-b: #f2620f1f;
-  --card-a: #ffffff0a; --card-b: #ffffff03; --card-line: #ffffff14;
-}
-:root[data-theme="light"] {
+/* Design tokens. Light is porcelain and graphite; dark flips them.
+   Ember (from the logo) is kept for things you can act on. */
+:root, :root[data-theme="light"] {
   color-scheme: light;
-  --ink: #faf8f5; --ink-2: #ffffff; --ink-3: #f1eee9;
-  --fg: #17191c; --mute: #6b7079; --soft: #4b5059;
-  --grid-line: #0000000a; --glow-a: #ff8a3d2e; --glow-b: #f2620f14;
-  --card-a: #ffffff; --card-b: #fffaf5; --card-line: #00000014;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eceef2;
+  --line: #dadde3;
+  --fg: #1b1e24;
+  --muted: #5d6470;
+  --ember-text: #b9470a;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1b1e24;
+  --surface: #23272e;
+  --surface-2: #2b3038;
+  --line: #363b44;
+  --fg: #e8eaed;
+  --muted: #9aa1ac;
+  --ember-text: #ff9a52;
 }
 
 @theme {
-  --color-ink: var(--ink);
-  --color-ink-2: var(--ink-2);
-  --color-ink-3: var(--ink-3);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
   --color-fg: var(--fg);
-  --color-white: var(--fg);
-  --color-brand: #ff8a3d;
-  --color-brand-2: #ee5a0a;
-  --color-mute: var(--mute);
-  --color-soft: var(--soft);
-  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", Consolas, "Cascadia Code", ui-monospace, monospace;
+  --color-muted: var(--muted);
+  --color-ember: #ee5a0a;
+  --color-ember-text: var(--ember-text);
+  --color-slate: #3a3e45;
+
+  --font-display: "Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
 }
 
 html { scroll-behavior: smooth; }
-body { @apply bg-ink text-fg font-sans antialiased; transition: background-color .3s, color .3s; }
-.grid-bg {
-  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-  background-size: 54px 54px;
-}
-@keyframes blink { 50% { opacity: 0 } }
+body { @apply bg-bg font-sans text-fg antialiased; font-size: 17px; line-height: 1.6; }
+h1, h2, h3 { font-family: var(--font-display); }
+
+:focus-visible { outline: 2px solid var(--color-ember); outline-offset: 3px; border-radius: 6px; }
+
+@keyframes blink { 50% { opacity: 0; } }
 .caret { animation: blink 1s steps(1) infinite; }
 
-.text-gradient { background: linear-gradient(110deg, #ffa057 0%, #ff8a3d 45%, #ee5a0a 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.glow-card { position: relative; background: linear-gradient(180deg, var(--card-a), var(--card-b)); border: 1px solid var(--card-line); transition: border-color .3s, transform .3s, box-shadow .3s; }
-.glow-card:hover { border-color: #ff8a3d66; transform: translateY(-3px); box-shadow: 0 20px 60px -20px #ff8a3d40; }
-.ring-gradient { position: relative; }
-.ring-gradient::before { content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; background: linear-gradient(135deg, #ff8a3d, transparent 40%, transparent 60%, #ee5a0a); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
-@keyframes marquee { to { transform: translateX(-50%); } }
-.marquee { animation: marquee 40s linear infinite; }
-@keyframes float { 50% { transform: translateY(-10px); } }
-.float { animation: float 6s ease-in-out infinite; }
-@keyframes reveal { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
-.reveal { animation: reveal .8s cubic-bezier(.2,.7,.2,1) both; }
-@media (prefers-reduced-motion: reduce) { .marquee, .float, .caret, .reveal { animation: none; } }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .45s cubic-bezier(.2, .7, .2, 1) both; }
 
-:root[data-theme="light"] .glow-card { box-shadow: 0 1px 2px #0000000a, 0 8px 24px -12px #0000001f; }
-.code-surface { background: #16181b; color: #d6d9de; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .caret, .rise { animation: none; }
+}

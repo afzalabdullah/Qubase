@@ -54,8 +54,8 @@ export function ResultView({ result, name, columnInfo, pending = {}, onEdit, onS
   const [hasPinned, setHasPinned] = useState(() => !!getPinned())
   useEffect(() => {
     const f = () => setHasPinned(!!getPinned())
-    window.addEventListener('datahive:pinned', f)
-    return () => window.removeEventListener('datahive:pinned', f)
+    window.addEventListener('qubase:pinned', f)
+    return () => window.removeEventListener('qubase:pinned', f)
   }, [])
   useEffect(() => { try { localStorage.setItem('totals', showTotals ? '1' : '0') } catch { /* ignore */ } }, [showTotals])
   const engine = useContext(ConnContext)?.engine

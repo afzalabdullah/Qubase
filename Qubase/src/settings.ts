@@ -163,7 +163,7 @@ export function resolvedTheme(s: Settings): 'light' | 'dark' {
 }
 
 const KEY = 'settings'
-const EVENT = 'datahive:settings'
+const EVENT = 'qubase:settings'
 
 export function readSettings(): Settings {
   let saved: Partial<Settings> = {}

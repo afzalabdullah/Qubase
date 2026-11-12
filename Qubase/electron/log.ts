@@ -4,7 +4,7 @@ import path from 'node:path'
 
 // Local crash and error log (nothing is sent anywhere). Kept under 2 MB.
 export const logFolder = () => path.join(app.getPath('userData'), 'logs')
-const logFile = () => path.join(logFolder(), 'dbstudio.log')
+const logFile = () => path.join(logFolder(), 'qubase.log')
 
 export function writeLog(source: string, text: string) {
   try {

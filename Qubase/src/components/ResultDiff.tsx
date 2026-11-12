@@ -6,7 +6,7 @@ import { IconX } from './Icons'
 // A result pinned with "Pin for compare", kept until the app closes
 let pinned: { name: string; result: QueryResult } | null = null
 export const getPinned = () => pinned
-export function setPinned(p: typeof pinned) { pinned = p; window.dispatchEvent(new Event('datahive:pinned')) }
+export function setPinned(p: typeof pinned) { pinned = p; window.dispatchEvent(new Event('qubase:pinned')) }
 
 type Row = Record<string, unknown>
 const norm = (v: unknown) => (v === null || v === undefined ? '\u0000' : cellText(v))

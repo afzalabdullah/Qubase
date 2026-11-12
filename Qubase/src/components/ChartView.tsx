@@ -39,8 +39,8 @@ export function ChartView({ result, order, initial, compact }: { result: QueryRe
   const [themeTick, setThemeTick] = useState(0)
   useEffect(() => {
     const on = () => setThemeTick((t) => t + 1)
-    window.addEventListener('datahive:settings', on)
-    return () => window.removeEventListener('datahive:settings', on)
+    window.addEventListener('qubase:settings', on)
+    return () => window.removeEventListener('qubase:settings', on)
   }, [])
 
   useEffect(() => {
