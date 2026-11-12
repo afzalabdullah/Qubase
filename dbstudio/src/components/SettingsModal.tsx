@@ -7,13 +7,9 @@ import { ACTIONS, comboFromEvent, conflicts, keyCaps, normalise, RESERVED, SHORT
 import { errMsg } from '../util'
 import { readSavedQueries, saveQuery } from '../saved'
 import { toast } from 'sonner'
+import { AI_PROVIDERS, aiProvider, type AiConfigView, type AiProvider } from '../../shared/aiProviders'
 import type { LicenceInfo } from '../../shared/types'
 
-const MODELS = [
-  ['claude-opus-5-5', 'Claude Opus 5.5 (best answers)'],
-  ['claude-sonnet-5-5', 'Claude Sonnet 5.5 (faster, cheaper)'],
-  ['claude-haiku-5-5', 'Claude Haiku 5.5 (fastest)']
-] as const
 
 export const SETTINGS_SECTIONS = [
   ['appearance', 'Appearance'],
@@ -24,7 +20,6 @@ export const SETTINGS_SECTIONS = [
   ['safety', 'Safety'],
   ['ai', 'AI assistant'],
   ['team', 'Team folder'],
-  ['licence', 'Licence & updates'],
   ['about', 'Troubleshooting']
 ] as const
 export type SettingsSection = typeof SETTINGS_SECTIONS[number][0]
@@ -39,7 +34,6 @@ const SECTION_KEYS: Partial<Record<SettingsSection, (keyof Settings)[]>> = {
   safety: ['blockNoWhere', 'confirmProduction'],
   ai: ['aiModel'],
   team: ['teamFolder'],
-  licence: ['updateUrl']
 }
 /** Settings that are not personal preferences; "Reset all" leaves them alone */
 const KEEP_ON_RESET_ALL: (keyof Settings)[] = ['teamFolder', 'updateUrl']
@@ -94,7 +88,14 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   const [saved0] = useState<Settings>(readSettings)
   const [s, setS] = useState<Settings>(saved0)
   const [key, setKey] = useState('')
-  const [hasKey, setHasKey] = useState<boolean | null>(null)
+  /** AI provider settings live in the main process (keys encrypted there) */
+  const [aiCfg, setAiCfg] = useState<AiConfigView | null>(null)
+  const [ai, setAi] = useState<{ provider: AiProvider; model: string; baseUrl: string } | null>(null)
+  const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiModels, setAiModels] = useState<string[]>([])
+  const aiFrom = (cfg: AiConfigView, provider: AiProvider) => ({ provider, model: cfg.providers[provider]?.model ?? aiProvider(provider).defaultModel, baseUrl: cfg.providers[provider]?.baseUrl ?? aiProvider(provider).baseUrl ?? '' })
+  const aiDirty = !!(aiCfg && ai && JSON.stringify(ai) !== JSON.stringify(aiFrom(aiCfg, aiCfg.provider)))
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [userSnips, setUserSnips] = useState<Snippet[]>(readUserSnippets)
@@ -114,12 +115,12 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   const [licenceKey, setLicenceKey] = useState('')
   const [teamMsg, setTeamMsg] = useState('')
   useEffect(() => {
-    window.db.aiHasKey().then(setHasKey).catch(() => setHasKey(false))
+    window.db.aiGetConfig().then((c) => { setAiCfg(c); setAi(aiFrom(c, c.provider)) }).catch(() => {})
     window.db.appVersion().then(setVersion).catch(() => {})
     window.db.getLicence().then(setLicence).catch(() => {})
   }, [])
 
-  const dirty = JSON.stringify(s) !== JSON.stringify(saved0) || snipsDirty || !!key
+  const dirty = JSON.stringify(s) !== JSON.stringify(saved0) || snipsDirty || !!key || aiDirty
   useEffect(() => { applySettings(s) }, [s])
   useEffect(() => () => applySettings(readSettings()), [])
   const clash = useMemo(() => conflicts((a) => shortcutFor(s, a)), [s])
@@ -130,7 +131,7 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
       writeSettings(s)
       writeUserSnippets(userSnips)
       writeHiddenSnippets(hidden)
-      if (key || hasKey) await window.db.aiSetKey(key.trim(), s.aiModel)
+      if (ai && (key || aiDirty)) await window.db.aiSetConfig({ provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, key: key.trim() })
       onSaved(s)
       onClose()
     } catch (e) { setError(errMsg(e)) }
@@ -498,14 +499,58 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
             <Row label="Ask before every change on Production connections" help="Mark a connection as Production on the connection screen."><Toggle checked={s.confirmProduction} onChange={(v) => set({ confirmProduction: v })} label="Confirm production" /></Row>
           </> })}
 
-          {Section({ id: 'ai', help: 'The key is encrypted with your Windows account and stays on this computer. The assistant receives table and column names and the query you ask about, never row data.', children: <>
-            <Row label="Anthropic API key">
-              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={hasKey ? 'Saved (leave empty to keep it)' : 'sk-ant-…'} autoComplete="off" />
-            </Row>
-            <Row label="Model">
-              <select value={s.aiModel} onChange={(e) => set({ aiModel: e.target.value })}>{MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
-            </Row>
-          </> })}
+          {Section({ id: 'ai', help: 'Use the AI service you prefer. Keys are encrypted with your Windows account and stay on this computer. The assistant receives table and column names and the query you ask about, never row data.', children: ai && (() => {
+            const pi = aiProvider(ai.provider)
+            const saved = aiCfg?.providers[ai.provider]
+            const input = { provider: ai.provider, model: ai.model, baseUrl: ai.baseUrl, key: key.trim() }
+            const runAi = async (fn: () => Promise<void>) => { setAiBusy(true); setAiMsg(null); try { await fn() } catch (e) { setAiMsg({ ok: false, text: errMsg(e) }) } finally { setAiBusy(false) } }
+            return <>
+              <Row label="Provider" help={pi.note} wide>
+                <div className="ai-providers">
+                  {AI_PROVIDERS.map((p) => (
+                    <button key={p.id} type="button" className={`ai-provider ${ai.provider === p.id ? 'on' : ''}`}
+                      onClick={() => { if (aiCfg) setAi(aiFrom(aiCfg, p.id)); setKey(''); setAiMsg(null); setAiModels([]) }}>
+                      <strong>{p.label}</strong>
+                      <span className="muted small-text">{aiCfg?.providers[p.id]?.hasKey ? 'Key saved' : p.needsKey ? 'Needs an API key' : 'No key needed'}</span>
+                    </button>
+                  ))}
+                </div>
+              </Row>
+              {(pi.needsKey || ai.provider === 'custom') && (
+                <Row label={`${pi.label} API key`} help={pi.keyUrl ? <>Get one at <a href={pi.keyUrl} target="_blank" rel="noreferrer">{pi.keyUrl.replace('https://', '')}</a></> : ai.provider === 'custom' ? 'Only if your server needs one.' : undefined}>
+                  <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={saved?.hasKey ? 'Saved (leave empty to keep it)' : pi.keyHint ?? 'Optional'} autoComplete="off" />
+                </Row>
+              )}
+              {ai.provider !== 'anthropic' && (
+                <Row label="Server address" help={ai.provider === 'custom' ? 'The OpenAI-compatible base URL, ending in /v1 for most servers.' : `Default: ${pi.baseUrl}`}>
+                  <input value={ai.baseUrl} onChange={(e) => setAi({ ...ai, baseUrl: e.target.value })} placeholder={pi.baseUrl} autoComplete="off" />
+                </Row>
+              )}
+              <Row label="Model" help="Pick a suggestion or type any model name your provider offers.">
+                <div className="input-group">
+                  {/* A real dropdown: a datalist hides every suggestion that doesn't match the text already typed */}
+                  <select value={[...new Set([...aiModels, ...pi.models])].includes(ai.model) ? ai.model : ''} onChange={(e) => { if (e.target.value) setAi({ ...ai, model: e.target.value }) }} title="Choose a model">
+                    <option value="">{aiModels.length ? `${aiModels.length} models…` : 'Suggestions…'}</option>
+                    {aiModels.length > 0 && <optgroup label="From your provider">{aiModels.map((m) => <option key={'l:' + m} value={m}>{m}</option>)}</optgroup>}
+                    <optgroup label="Suggested">{pi.models.filter((m) => !aiModels.includes(m)).map((m) => <option key={m} value={m}>{m}</option>)}</optgroup>
+                  </select>
+                  <input value={ai.model} onChange={(e) => setAi({ ...ai, model: e.target.value })} placeholder={pi.defaultModel || 'model name'} autoComplete="off" />
+                  <button type="button" className="btn btn-sm" disabled={aiBusy} onClick={() => runAi(async () => {
+                    const list = await window.db.aiListModels(input)
+                    setAiModels(list)
+                    setAiMsg({ ok: true, text: list.length ? `${list.length} models found. Pick one from the dropdown.` : 'The provider listed no models.' })
+                  })}>Load models</button>
+                </div>
+              </Row>
+              <Row label="Check" help="Sends one tiny request with the settings above (before saving).">
+                <div className="ai-test">
+                  <button type="button" className="btn btn-sm" disabled={aiBusy} onClick={() => runAi(async () => setAiMsg({ ok: true, text: await window.db.aiTest(input) }))}>{aiBusy ? 'Checking…' : 'Test connection'}</button>
+                  {saved?.hasKey && pi.needsKey && <button type="button" className="btn btn-sm ghost" onClick={async () => { await window.db.aiSetConfig({ ...input, key: null }); const c = await window.db.aiGetConfig(); setAiCfg(c); setAiMsg({ ok: true, text: 'Key removed' }) }}>Remove saved key</button>}
+                </div>
+              </Row>
+              {aiMsg && <div className={`notice ${aiMsg.ok ? 'ok' : 'error'}`}>{aiMsg.text}</div>}
+            </>
+          })() })}
 
           {Section({ id: 'team', help: 'Team queries show up in the command palette. Connections are shared without passwords; each person enters their own.', children: <>
             <Row label="Shared folder" help="A OneDrive, Dropbox or network folder everyone can reach." wide>
@@ -523,28 +568,8 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
             {teamMsg && <p className="small-text pad">{teamMsg}</p>}
           </> })}
 
-          {Section({ id: 'licence', children: <>
-            <Row label="Version"><strong>{version || '…'}</strong></Row>
-            {licence?.valid
-              ? <Row label="Licence" help={`${licence.plan ?? 'pro'}${licence.seats ? ` · ${licence.seats} seat${licence.seats > 1 ? 's' : ''}` : ''}${licence.expires ? ` · until ${licence.expires}` : ''}`}>
-                  <span>Licensed to <strong>{licence.name}</strong></span>
-                  <button className="btn btn-sm" onClick={async () => { await window.db.clearLicence(); setLicence({ valid: false }) }}>Remove</button>
-                </Row>
-              : <Row label="Licence key" help={licence?.error ? <span className="err-text">{licence.error}</span> : undefined} wide>
-                  <div className="input-group">
-                    <input value={licenceKey} onChange={(e) => setLicenceKey(e.target.value)} placeholder="Paste your key" autoComplete="off" />
-                    <button type="button" className="btn btn-sm" disabled={!licenceKey.trim()} onClick={activate}>Activate</button>
-                  </div>
-                </Row>}
-            <Row label="Update address" help={updateMsg || 'An https folder with latest.yml and the installer.'} wide>
-              <div className="input-group">
-                <input value={s.updateUrl} onChange={(e) => set({ updateUrl: e.target.value })} placeholder="https://downloads.example.com/qubase" />
-                <button type="button" className="btn btn-sm" disabled={!s.updateUrl} onClick={checkUpdate}>Check now</button>
-              </div>
-            </Row>
-          </> })}
-
           {Section({ id: 'about', children: <>
+            <Row label="Version"><strong>{version || '…'}</strong></Row>
             <Row label="Log file" help="Errors and crashes are written to a local log file. Nothing is sent anywhere.">
               <button className="btn btn-sm" onClick={() => window.db.openLogFolder()}>Open log folder</button>
             </Row>
@@ -558,7 +583,7 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
         <footer className="settings-bar">
           {error ? <span className="err-text">{error}</span> : <span>You have unsaved changes.</span>}
           <div className="spacer" />
-          <button className="btn" onClick={() => { setS(saved0); setUserSnips(readUserSnippets()); setHidden(readHiddenSnippets()); setSnipsDirty(false); setKey(''); setError('') }} disabled={!dirty}>Discard</button>
+          <button className="btn" onClick={() => { setS(saved0); setUserSnips(readUserSnippets()); setHidden(readHiddenSnippets()); setSnipsDirty(false); setKey(''); if (aiCfg) setAi(aiFrom(aiCfg, aiCfg.provider)); setAiMsg(null); setError('') }} disabled={!dirty}>Discard</button>
           <button className="btn btn-primary" onClick={save} disabled={!dirty}>Save <span className="kbd-hint">Ctrl+S</span></button>
         </footer>
       )}

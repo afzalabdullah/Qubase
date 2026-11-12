@@ -5,6 +5,7 @@ import type { ConnectionConfig, SavedConnection } from '../../shared/types'
 import { DbBadge } from './DbBadge'
 import { IconCheck, IconFolder, IconPlus, IconTrash } from './Icons'
 import { errMsg } from '../util'
+import { connectionHint } from '../connHints'
 
 const COLORS = ['', '#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '#ec4899']
 
@@ -53,6 +54,17 @@ export function parseConnUrl(text: string): Partial<ConnectionConfig> | null {
   } catch { return null }
 }
 
+/** Database type from a URL scheme, e.g. postgresql:// → postgres */
+const SCHEMES: Record<string, DbKind> = {
+  postgres: 'postgres', postgresql: 'postgres', mysql: 'mysql', mariadb: 'mariadb', sqlserver: 'mssql', mssql: 'mssql',
+  oracle: 'oracle', clickhouse: 'clickhouse', mongodb: 'mongodb', 'mongodb+srv': 'mongodb', redis: 'redis', rediss: 'redis',
+  libsql: 'libsql', cockroachdb: 'cockroach', redshift: 'redshift', trino: 'trino', presto: 'trino', cassandra: 'cassandra'
+}
+export function kindFromUrl(text: string): DbKind | null {
+  const m = /^\s*(?:jdbc:)?([a-z][a-z0-9+]*):\/\//i.exec(text)
+  return m ? SCHEMES[m[1].toLowerCase()] ?? null : null
+}
+
 interface Props {
   onConnected: (id: string, canEdit: boolean, conn: SavedConnection) => void
 }
@@ -60,7 +72,7 @@ interface Props {
 export function ConnectionScreen({ onConnected }: Props) {
   const [saved, setSaved] = useState<SavedConnection[]>([])
   const [draft, setDraft] = useState<SavedConnection>({ id: newId(), name: '', config: blankConfig('postgres') })
-  const [status, setStatus] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null)
+  const [status, setStatus] = useState<{ kind: 'error' | 'ok'; text: string; hint?: string } | null>(null)
   const [busy, setBusy] = useState<'' | 'test' | 'connect'>('')
   const [section, setSection] = useState<'' | 'ssh' | 'ssl' | 'safety'>('')
   const [cat, setCat] = useState<Category>('all')
@@ -80,6 +92,31 @@ export function ConnectionScreen({ onConnected }: Props) {
   const pickType = (kind: DbKind) => {
     setDraft((d) => ({ ...d, config: { ...blankConfig(kind), password: '' } }))
     setStatus(null); setPicking(false); setQuick('')
+  }
+  /** Paste a URL on the type picker: detect the database and fill the form */
+  const pasteUrl = (text: string) => {
+    setQuick(text)
+    const kind = kindFromUrl(text)
+    if (!kind) return
+    const base = blankConfig(kind)
+    const engine = driverFor(kind).engine
+    const config: ConnectionConfig = engine === 'mongodb' || engine === 'redis' || engine === 'libsql'
+      ? { ...base, url: text.trim() }
+      : { ...base, ...(parseConnUrl(text.replace(/^\s*jdbc:/i, '')) ?? {}) }
+    setDraft((d) => ({ ...d, config }))
+    setPicking(false)
+    setStatus({ kind: 'ok', text: `Detected ${driverFor(kind).label} and filled in the form` })
+  }
+  const openSample = async () => {
+    const file = await window.db.sampleDb()
+    const conn: SavedConnection = { id: newId(), name: 'Sample shop (demo)', group: 'Examples', config: { kind: 'sqlite', file } }
+    setSaved(await window.db.saveConnection(conn))
+    setDraft(conn); setPicking(false)
+    connect(conn)
+  }
+  const fail = (e: unknown, c: ConnectionConfig) => {
+    const text = errMsg(e)
+    setStatus({ kind: 'error', text, hint: connectionHint(text, c) })
   }
   const types = DRIVERS.filter((d) => (cat === 'all' || CATEGORY[d.kind] === cat) && d.label.toLowerCase().includes(typeQ.trim().toLowerCase()))
   const fillFromUrl = (text: string) => {
@@ -142,7 +179,7 @@ export function ConnectionScreen({ onConnected }: Props) {
       await window.db.test(cfg)
       setStatus({ kind: 'ok', text: 'Connection looks good' })
     } catch (e) {
-      setStatus({ kind: 'error', text: errMsg(e) })
+      fail(e, cfg)
     } finally { setBusy('') }
   }
 
@@ -162,7 +199,7 @@ export function ConnectionScreen({ onConnected }: Props) {
       const { id, canEdit } = await window.db.connect(conn.config)
       onConnected(id, canEdit, conn)
     } catch (e) {
-      setStatus({ kind: 'error', text: errMsg(e) })
+      fail(e, conn.config)
     } finally { setBusy('') }
   }
 
@@ -219,6 +256,12 @@ export function ConnectionScreen({ onConnected }: Props) {
 
           {picking ? (
             <section className="type-picker">
+              <label className="field quick-url"><span>Paste a connection URL <span className="muted">(detects the database and fills in the form)</span></span>
+                <input value={quick} onChange={(e) => pasteUrl(e.target.value)} placeholder="postgres://user:password@host:5432/database" autoComplete="off" />
+              </label>
+              {!saved.some((s) => s.config.kind === 'sqlite' && s.config.file?.endsWith('sample-shop.db')) && (
+                <div className="notice ok sample-hint">Just looking around? <button type="button" className="link-btn" onClick={openSample} disabled={!!busy}>Open the sample database</button> (a small shop with customers, products and orders).</div>
+              )}
               <div className="type-tools">
                 <div className="settings-search small type-search">
                   <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
@@ -400,7 +443,7 @@ export function ConnectionScreen({ onConnected }: Props) {
               </div>
             </div>
 
-            {status && <div className={`notice ${status.kind} span-2`}>{status.kind === 'ok' && <IconCheck />} {status.text}</div>}
+            {status && <div className={`notice ${status.kind} span-2`}>{status.kind === 'ok' && <IconCheck />} {status.hint ? <><strong>{status.hint}</strong><div className="muted small-text">{status.text}</div></> : status.text}</div>}
 
             <div className="form-actions span-2 sticky-actions">
               <button type="button" className="btn" onClick={test} disabled={!!busy}>{busy === 'test' ? 'Testing…' : 'Test'}</button>

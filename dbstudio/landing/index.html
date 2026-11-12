@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      try { var s = localStorage.getItem('theme') } catch (e) {}
+      document.documentElement.dataset.theme = s || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <title>Qubase · One desktop app for 23 databases</title>
+    <meta name="description" content="Query, design and explore PostgreSQL, MySQL, SQL Server, MongoDB, Redis and 18 more databases from one app, with an AI assistant that writes SQL in your editor." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -13,7 +13,7 @@ import { toast } from 'sonner'
 import { joinSource, valueSource } from '../smartComplete'
 import type { ForeignKeyInfo } from '../../shared/types'
 import { PlanView } from './PlanView'
-import { AiPanel } from './AiPanel'
+import { AiPanel, type EditorBridge, type RunOutcome } from './AiPanel'
 import { IconFormat, IconHistory, IconPlan, IconPlay, IconSpark, IconStar, IconStop, IconTrash } from './Icons'
 import { errLine, errMsg } from '../util'
 import { addHistory, readHistory, HistoryItem } from '../history'
@@ -183,6 +183,59 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
   const [askParams, setAskParams] = useState<{ sql: string; names: string[] } | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const [chatKey] = useState(() => crypto.randomUUID())
+  const executeRef = useRef<(code: string) => Promise<RunOutcome | undefined>>(async () => undefined)
+
+  /** What the AI chat sees in, and writes into, this editor */
+  const aiBridge = useMemo<EditorBridge>(() => {
+    const view = () => viewRef.current
+    return {
+      context: () => {
+        const v = view()
+        if (!v) return { text: '', selection: '', cursorLine: 1, lineCount: 1 }
+        const sel = v.state.selection.main
+        return { text: v.state.doc.toString(), selection: v.state.sliceDoc(sel.from, sel.to), cursorLine: v.state.doc.lineAt(sel.head).number, lineCount: v.state.doc.lines }
+      },
+      live: (where) => {
+        const v = view()
+        if (!v) return { update: (c: string) => setText(c), done: () => {} }
+        const sel = v.state.selection.main
+        let from: number, to: number, prefix = ''
+        if (where === 'replace' || !v.state.doc.length) { from = 0; to = v.state.doc.length }
+        else {
+          from = sel.from; to = sel.to
+          // At the cursor: start on a fresh line when the cursor line already has text
+          if (sel.empty && v.state.doc.lineAt(from).text.trim()) { from = to = v.state.doc.lineAt(from).to; prefix = '\n\n' }
+        }
+        let len = to - from
+        return {
+          update: (code: string) => {
+            const insert = prefix + code
+            v.dispatch({ changes: { from, to: from + len, insert }, selection: { anchor: from + insert.length }, scrollIntoView: true, userEvent: 'input.ai' })
+            len = insert.length
+          },
+          // Cursor after the new SQL (no selection, so the next message is about the whole query)
+          done: () => { v.dispatch({ selection: { anchor: from + len }, scrollIntoView: true }); v.focus() }
+        }
+      },
+      insert: (code) => {
+        const v = view()
+        if (!v) { setText(code); return }
+        const sel = v.state.selection.main
+        const at = sel.empty && v.state.doc.lineAt(sel.from).text.trim() ? v.state.doc.lineAt(sel.from).to : sel.from
+        const insert = at !== sel.from ? `\n\n${code}` : code
+        v.dispatch({ changes: { from: at, to: sel.empty ? at : sel.to, insert }, selection: { anchor: at + insert.length }, scrollIntoView: true })
+        v.focus()
+      },
+      replace: (code) => {
+        const v = view()
+        if (!v) { setText(code); return }
+        v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: code }, selection: { anchor: code.length }, scrollIntoView: true })
+        v.focus()
+      },
+      run: (code) => executeRef.current(code)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const isSql = language === 'sql'
 
   // Own connection per tab, so tabs run queries in parallel (like SSMS)
@@ -315,7 +368,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
     v.dispatch({ effects: setErrorLine.of(abs), selection: { anchor: v.state.doc.line(abs).from }, scrollIntoView: true })
   }
 
-  const execute = useCallback(async (code: string, filled = false) => {
+  const execute = useCallback(async (code: string, filled = false): Promise<RunOutcome | undefined> => {
     if (!code.trim() || !sessionId || running) return
     // :name parameters: ask for the values first
     if (isSql && !filled && readSettings().queryParams) {
@@ -348,6 +401,8 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
       const bare = code.replace(/--[^\n]*/g, '')
       if (/\b(begin\s+tran(saction)?|start\s+transaction)\b|^\s*begin\s*;/im.test(bare)) setInTx(true)
       if (/^\s*(commit|rollback)\b/im.test(bare)) setInTx(false)
+      const g = results[firstGrid >= 0 ? firstGrid : 0]
+      return { rows: total, ms, preview: g?.columns.length ? { columns: g.columns, rows: g.rows.slice(0, 10).map((r) => g.columns.map((c) => r[c])) } : undefined }
     } catch (e) {
       const msg = errMsg(e)
       const line = errLine(e)
@@ -357,6 +412,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
       markError(line)
       onStatus('Query failed')
       addHistory({ text: code, at: Date.now(), ok: false, ms: Math.round(performance.now() - started) })
+      return { error: msg }
     } finally {
       setRunning(false); onRunningChange(false)
     }
@@ -385,6 +441,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
   }, [text, isSql])
 
   const runCurrent = useCallback(() => execute(codeToRun()), [execute, codeToRun])
+  executeRef.current = (code: string) => execute(code)
 
   const explain = async () => {
     const code = codeToRun()
@@ -602,17 +659,10 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
         <AiPanel
           engine={dialect}
           getSchema={schemaText}
-          getSql={() => codeToRun()}
           lastError={lastError}
-          onInsert={(code) => {
-            const v = viewRef.current
-            if (!v) { setText(code); return }
-            const sel = v.state.selection.main
-            // Replace the selection, or add the SQL on new lines at the end
-            if (!sel.empty) v.dispatch({ changes: { from: sel.from, to: sel.to, insert: code } })
-            else v.dispatch({ changes: { from: v.state.doc.length, insert: `${v.state.doc.length ? '\n\n' : ''}${code}` } })
-            v.focus()
-          }}
+          editor={aiBridge}
+          chatKey={chatKey}
+          connection={conn.name || conn.config.file?.split(/[\\/]/).pop() || conn.config.database || conn.config.host}
           onClose={() => setAiOpen(false)}
         />
       )}

@@ -1,5 +1,6 @@
 // Types shared by the Electron main process and the React UI.
 import type { DbKind } from './drivers'
+import type { AiConfigInput, AiConfigView } from './aiProviders'
 export type { DbKind } from './drivers'
 
 export interface ConnectionConfig {
@@ -182,6 +183,15 @@ export interface TeamData { queries: TeamQuery[]; connections: SavedConnection[]
 
 export interface ScheduleRun { at: number; ok: boolean; ms: number; rows?: number; file?: string; error?: string }
 
+export interface AiChatRequest {
+  engine: string
+  schema: string
+  /** The query editor right now: all text, the selection and the cursor line */
+  editor: { text: string; selection?: string; cursorLine?: number; lineCount?: number }
+  lastError?: string
+  messages: { role: 'user' | 'assistant'; content: string }[]
+}
+
 export interface AiRequest {
   /** What the user typed */
   question: string
@@ -257,6 +267,16 @@ export interface DbApi {
   aiAsk(req: AiRequest): Promise<string>
   aiHasKey(): Promise<boolean>
   aiSetKey(key: string, model: string): Promise<void>
+  /** Chosen AI provider and its settings (keys are never returned, only whether one is saved) */
+  aiGetConfig(): Promise<AiConfigView>
+  /** Streaming chat; text arrives through onAiChunk with the same id. Resolves when the answer is complete. */
+  aiChat(id: string, req: AiChatRequest): Promise<void>
+  aiStop(id: string): Promise<void>
+  onAiChunk(cb: (id: string, text: string) => void): () => void
+  aiSetConfig(c: AiConfigInput): Promise<void>
+  /** Sends a tiny test request with these settings and describes the answer */
+  aiTest(c: AiConfigInput): Promise<string>
+  aiListModels(c: AiConfigInput): Promise<string[]>
   /** Write an error to the local log file */
   logError(text: string): Promise<void>
   openLogFolder(): Promise<void>
@@ -266,6 +286,8 @@ export interface DbApi {
   saveConnection(conn: SavedConnection): Promise<SavedConnection[]>
   deleteSaved(id: string): Promise<SavedConnection[]>
   /** 'db' shows database files first; 'any' is any file (keys, certificates); 'data' is CSV/Excel/JSON */
+  /** Path of the bundled demo SQLite database (created on first use) */
+  sampleDb(): Promise<string>
   pickFile(kind?: 'db' | 'any' | 'data'): Promise<string | null>
   /** Called when the user closes the window; reply with confirmClose() to let it close */
   onCloseRequest(cb: () => void): () => void

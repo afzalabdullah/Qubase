@@ -9,6 +9,7 @@ import { openTunnel, Tunnel } from './tunnel'
 import { readImportFile } from './importer'
 import { installCrashLog, openLogFolder, writeLog } from './log'
 import * as ai from './ai'
+import { sampleDatabase } from './sample'
 import { checkForUpdate, clearLicence, getLicence, readTeam, setLicence, shareToTeam } from './product'
 import { deleteSchedule, listSchedules, runSchedule, saveSchedule, startScheduler } from './scheduler'
 import { driverFor } from '../shared/drivers'
@@ -186,6 +187,13 @@ ipcMain.handle('import:read', (_e, file: string) => readImportFile(file))
 ipcMain.handle('ai:ask', (_e, req: AiRequest) => ai.ask(req))
 ipcMain.handle('ai:hasKey', () => ai.hasKey())
 ipcMain.handle('ai:setKey', (_e, key: string, model: string) => ai.setKey(key, model))
+ipcMain.handle('ai:getConfig', () => ai.getConfig())
+// Streaming chat: pieces of the answer go back as 'ai:chunk' events; the call settles when the answer ends
+ipcMain.handle('ai:chat', (e, id: string, req: ai.ChatRequest) => ai.chat(id, req, (t) => { if (!e.sender.isDestroyed()) e.sender.send('ai:chunk', id, t) }))
+ipcMain.handle('ai:stop', (_e, id: string) => ai.stopChat(id))
+ipcMain.handle('ai:setConfig', (_e, c) => ai.setConfig(c))
+ipcMain.handle('ai:test', (_e, c) => ai.test(c))
+ipcMain.handle('ai:listModels', (_e, c) => ai.listModels(c))
 ipcMain.handle('log:error', (_e, text: string) => writeLog('renderer', String(text).slice(0, 20000)))
 ipcMain.handle('log:open', () => openLogFolder())
 /** Stop a running query. Drivers without a cancel call get a fresh connection instead. */
@@ -263,6 +271,8 @@ ipcMain.handle('db:applyUpdates', (_e, id: string, u: RowUpdate[]) => getClient(
 ipcMain.handle('store:list', () => listSaved())
 ipcMain.handle('store:save', (_e, c: SavedConnection) => saveConnection(c))
 ipcMain.handle('store:delete', (_e, id: string) => deleteSaved(id))
+
+ipcMain.handle('app:sampleDb', () => sampleDatabase())
 
 ipcMain.handle('dialog:pickFile', async (e, kind: 'db' | 'any' | 'data' = 'db') => {
   const win = BrowserWindow.fromWebContents(e.sender)!

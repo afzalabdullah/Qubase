@@ -73,14 +73,14 @@ const Row = memo(function Row({ i, displayIndex, columns, row, edits, selCol, ed
   return (
     <tr className={`data-row ${displayIndex % 2 ? 'even' : ''} ${selected ? 'row-selected' : ''} ${extraClass}`}>
       <td className="rownum" onClick={(e) => actions.current.select(i, undefined, e)}>{displayIndex + 1}</td>
-      {columns.map((col) => {
+      {columns.map((col, ci) => {
         const changed = col in edits
         const value = changed ? edits[col] : row[col]
         const isNull = value === null || value === undefined
         const text = isNull ? 'NULL' : cellText(value)
         return (
           <td
-            key={col}
+            key={`${ci}:${col}`}
             className={[changed && 'changed', isNull && 'null', selected && selCol === col && 'selected', typeof value === 'number' && 'num'].filter(Boolean).join(' ')}
             onClick={(e) => actions.current.select(i, col, e)}
             onDoubleClick={() => actions.current.edit(i, col)}
@@ -247,11 +247,11 @@ export function ResultGrid({ result, order, columnInfo = {}, pending = {}, sort,
         <thead>
           <tr>
             <th className="rownum corner" onClick={selectAll} title="Select all rows (Ctrl+A)" />
-            {result.columns.map((c) => {
+            {result.columns.map((c, ci) => {
               const info = columnInfo[c]
               const active = sort?.col === c
               return (
-                <th key={c} onClick={() => onSort(c)} className={active ? 'sorted' : ''} title="Click to sort">
+                <th key={`${ci}:${c}`} onClick={() => onSort(c)} className={active ? 'sorted' : ''} title="Click to sort">
                   <div className="th-inner">
                     {info?.primaryKey && <IconKey className="pk" width={12} height={12} />}
                     <span>{c}</span>

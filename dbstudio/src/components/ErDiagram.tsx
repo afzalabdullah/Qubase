@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import type { ColumnInfo, ForeignKeyInfo, TableInfo, TableStructure } from '../../shared/types'
 import { IconRefresh } from './Icons'
 import { errMsg } from '../util'
@@ -51,8 +51,8 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
   const [busy, setBusy] = useState<{ label: string; step: string; pct: number; load?: boolean } | null>(null)
   const cancelRef = useRef(false)
   const step = (text: string, pct: number) => setBusy((b) => (b ? { ...b, step: text, pct: Math.max(b.pct, pct) } : b))
-  const [hover, setHover] = useState('')
-  const [hoverRel, setHoverRel] = useState('')
+  const [hoverNow, setHover] = useState('')
+  const [hoverRelNow, setHoverRel] = useState('')
   const [mode, setMode] = useState<ColMode>('all')
   const [labels, setLabels] = useState(true)
   const [panel, setPanel] = useState(true)
@@ -209,6 +209,23 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     return i < 0 ? HEAD_H / 2 : HEAD_H + i * ROW_H + ROW_H / 2
   }
 
+  // Hover highlighting is deferred so moving the mouse over a big diagram never blocks the screen
+  const hover = useDeferredValue(hoverNow), hoverRel = useDeferredValue(hoverRelNow)
+  const q = find.trim().toLowerCase()
+  // Only draw what is near the screen, and skip column text when zoomed too far out to read it.
+  // The visible area is rounded to coarse blocks so panning inside a block needs no redraw.
+  const [full, setFull] = useState(false) // exports need every table drawn
+  const big = boxes.length > 40
+  const detail = full || !big || view.k >= 0.4
+  const sw = svgRef.current?.clientWidth || 1600, sh = svgRef.current?.clientHeight || 1000
+  const ww = sw / view.k, wh = sh / view.k
+  const grid = 2 ** Math.ceil(Math.log2(Math.max(ww, wh) / 2))
+  const area = full || !big ? null : {
+    x1: Math.floor((-view.x / view.k - ww * 0.5) / grid) * grid, y1: Math.floor((-view.y / view.k - wh * 0.5) / grid) * grid,
+    x2: Math.ceil((-view.x / view.k + ww * 1.5) / grid) * grid, y2: Math.ceil((-view.y / view.k + wh * 1.5) / grid) * grid
+  }
+  const areaKey = area ? `${area.x1},${area.y1},${area.x2},${area.y2}` : 'all'
+  const scene = useMemo(() => {
   // ---- relationship lines with crow's-foot ends ----
   const relEls = rels.filter((r) => r.to && pos[r.from.key] && pos[r.to.key]).map((r) => {
     const a = pos[r.from.key], t = pos[r.to!.key], A = r.from, T = r.to!
@@ -220,6 +237,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     const s1 = right ? 1 : -1, s2 = self ? 1 : right ? -1 : 1
     const curve = self ? 70 : Math.max(50, Math.abs(x2 - x1) / 2)
     const c1x = x1 + s1 * curve, c2x = x2 + s2 * curve
+    if (area && (Math.max(x1, x2) + curve < area.x1 || Math.min(x1, x2) - curve > area.x2 || Math.max(y1, y2) < area.y1 || Math.min(y1, y2) > area.y2)) return null
     const on = hoverRel === r.id || hover === A.key || hover === T.key
     const dim = (hover || hoverRel) && !on
     // Bezier midpoint for the label
@@ -246,7 +264,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
           ? <circle cx={x1 + s1 * 20} cy={y1} r={4} className="er-ring" />
           : <path d={`M ${x1 + s1 * 18} ${y1 - 6} V ${y1 + 6}`} className="er-end" />}
         <path d={`M ${x2 + s2 * 7} ${y2 - 6} V ${y2 + 6} M ${x2 + s2 * 12} ${y2 - 6} V ${y2 + 6}`} className="er-end" />
-        {(labels || on || off) && (
+        {((labels && detail) || on || off) && (
           <g transform={`translate(${mx} ${my})`} className="er-label" onMouseDown={(e) => onRelDown(e, r.id)} onDoubleClick={(e) => { e.stopPropagation(); setBend((b) => { const n = { ...b }; delete n[r.id]; return n }) }}>
             <rect x={-lw / 2} y={-17} width={lw} height={34} rx={6} />
             <text y={-3} textAnchor="middle" className="er-label-name">{label}</text>
@@ -264,7 +282,49 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     r.fk.columns.forEach((c) => hot.add(`${r.from.key}|${c.toLowerCase()}`))
     r.fk.refColumns.forEach((c) => hot.add(`${r.to!.key}|${c.toLowerCase()}`))
   }
-  const q = find.trim().toLowerCase()
+  // Tables that stay bright while something is hovered (worked out once, not per table)
+  const lit = new Set<string>()
+  if (hover) { lit.add(hover); for (const r of rels) if (r.to && (r.from.key === hover || r.to.key === hover)) { lit.add(r.from.key); lit.add(r.to.key) } }
+  for (const h of hot) lit.add(h.slice(0, h.lastIndexOf('|')))
+  const anyHover = !!(hover || hoverRel)
+  return <>{relEls}
+{boxes.map((b) => {
+              const p = pos[b.key]
+              if (!p) return null
+              if (area && (p.x > area.x2 || p.x + b.w < area.x1 || p.y > area.y2 || p.y + height(b) < area.y1)) return null
+              const f = fkCols(b), u = uniqueCols(b)
+              const rows = rowsOf(b)
+              const match = q && fullName(b.t).toLowerCase().includes(q)
+              const nameMax = Math.floor((b.w - PAD_X * 2 - BADGE_W - 60) / NAME_CH)
+              return (
+                <g key={b.key} transform={`translate(${p.x} ${p.y})`} className={`er-box ${hover === b.key ? 'on' : ''} ${match ? 'match' : ''} ${anyHover && !lit.has(b.key) ? 'dim' : ''}`}
+                  onMouseDown={(e) => onDown(e, b.key)} onMouseEnter={() => setHover(b.key)} onMouseLeave={() => setHover('')}
+                  onDoubleClick={() => onOpenTable(b.t)}>
+                  <rect width={b.w} height={height(b)} rx={8} className="er-body" />
+                  <path d={`M 0 8 Q 0 0 8 0 H ${b.w - 8} Q ${b.w} 0 ${b.w} 8 V ${HEAD_H} H 0 Z`} className="er-head" />
+                  <text x={PAD_X} y={22} className="er-title">{b.t.schema && <tspan className="er-schema">{b.t.schema}.</tspan>}{b.t.name}</text>
+                  <text x={b.w - PAD_X} y={22} textAnchor="end" className="er-count">{b.s.columns.length}</text>
+                  <title>{`${fullName(b.t)} · ${b.s.columns.length} columns · double-click to open`}</title>
+                  {detail && rows.map((c, i) => {
+                    const isFk = f.has(c.name)
+                    const tag = c.primaryKey ? 'PK' : isFk ? 'FK' : u.has(c.name) ? 'UQ' : ''
+                    const isHot = hot.has(`${b.key}|${c.name.toLowerCase()}`)
+                    return (
+                      <g key={c.name} transform={`translate(0 ${HEAD_H + i * ROW_H})`} className={isHot ? 'er-row hot' : 'er-row'}>
+                        {i % 2 === 1 && <rect x={1} width={b.w - 2} height={ROW_H} className="er-stripe" />}
+                        {isHot && <rect x={1} width={b.w - 2} height={ROW_H} className="er-hotbg" />}
+                        {tag && <><rect x={PAD_X - 2} y={4} width={22} height={14} rx={3} className={`er-tag ${tag.toLowerCase()}`} /><text x={PAD_X + 9} y={14.5} textAnchor="middle" className="er-tag-text">{tag}</text></>}
+                        <text x={PAD_X + BADGE_W} y={15} className={`er-col ${c.primaryKey ? 'pk' : ''} ${c.nullable ? 'null' : ''}`}>{c.name.length > nameMax ? c.name.slice(0, nameMax - 1) + '…' : c.name}{!c.nullable && !c.primaryKey ? <tspan className="er-req"> *</tspan> : null}</text>
+                        <text x={b.w - PAD_X} y={15} textAnchor="end" className="er-type">{c.dataType.length > 22 ? c.dataType.slice(0, 21) + '…' : c.dataType}{c.nullable ? '?' : ''}</text>
+                        <title>{`${c.name} ${c.dataType}${c.nullable ? ' NULL' : ' NOT NULL'}${c.primaryKey ? ' · primary key' : ''}${isFk ? ' · foreign key' : ''}${c.defaultValue != null ? ` · default ${c.defaultValue}` : ''}${c.autoIncrement ? ' · auto increment' : ''}`}</title>
+                      </g>
+                    )
+                  })}
+                </g>
+              )
+            })}</>
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxes, rels, pos, bend, hover, hoverRel, labels, q, mode, onOpenTable, areaKey, detail])
 
   // ---- export ----
   const baseName = () => `er-diagram${schema ? '-' + schema : ''}`
@@ -316,13 +376,23 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg) // the page only allows data: images
     await img.decode()
     if (cancelRef.current) throw new Cancelled()
-    // Canvas limits: 16k px per side and about 250M pixels in total
-    const k = Math.min(scale, 16000 / Math.max(W, H), Math.sqrt(250e6 / (W * H)))
-    const c = document.createElement('canvas'); c.width = Math.round(W * k); c.height = Math.round(H * k)
-    const ctx = c.getContext('2d')!; ctx.scale(k, k); ctx.drawImage(img, 0, 0)
-    step('Encoding PNG', 0.85)
-    await new Promise((r) => setTimeout(r, 0))
-    return c
+    // A canvas that can't get enough memory comes back blank (transparent) without any error.
+    // Stay well inside what any PC can hold (≈40M pixels, 160 MB), and check the result,
+    // shrinking further if the drawing didn't take.
+    let k = Math.min(scale, 16000 / Math.max(W, H), Math.sqrt(40e6 / (W * H)))
+    for (let tries = 0; ; tries++) {
+      const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(W * k)); c.height = Math.max(1, Math.round(H * k))
+      const ctx = c.getContext('2d', { willReadFrequently: true })
+      if (ctx) {
+        ctx.scale(k, k); ctx.drawImage(img, 0, 0)
+        // The background is solid, so every corner and the middle must be opaque
+        const pts = [[0, 0], [c.width - 1, 0], [0, c.height - 1], [c.width - 1, c.height - 1], [c.width >> 1, c.height >> 1]]
+        if (pts.every(([x, y]) => ctx.getImageData(x, y, 1, 1).data[3] > 0)) { step('Encoding PNG', 0.85); await new Promise((r) => setTimeout(r, 0)); return c }
+      }
+      c.width = c.height = 0 // free the memory before trying smaller
+      if (tries >= 4) throw new Error('The diagram is too large to draw as an image on this computer. Try PDF or SVG instead.')
+      k /= 1.5
+    }
   }
   const say = (p: string | null) => { if (p) setStatus(`Saved to ${p}`) }
   /** Browser-style download; used when the app's file bridge is older than this page (e.g. dev reload) */
@@ -339,8 +409,10 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
     setMenu(false); setError(''); setStatus(''); setHover(''); setHoverRel('')
     cancelRef.current = false
     setBusy({ label: `Exporting ${label}`, step: 'Getting ready', pct: 0.02 })
+    setFull(true) // the screen only draws nearby tables; the file needs all of them
     await new Promise((r) => setTimeout(r, 80)) // let the overlay paint first
-    try { await f() } catch (e) { if (e instanceof Cancelled) setStatus('Export cancelled'); else setError(`Export failed: ${errMsg(e)}`) } finally { setBusy(null) }
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    try { await f() } catch (e) { if (e instanceof Cancelled) setStatus('Export cancelled'); else setError(`Export failed: ${errMsg(e)}`) } finally { setBusy(null); setFull(false) }
   }
   const pngBase64 = async (c: HTMLCanvasElement) => {
     const blob = await new Promise<Blob>((r, j) => c.toBlob((b) => (b ? r(b) : j(new Error('The image is too large to encode'))), 'image/png'))
@@ -442,41 +514,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
       <div className="er-main">
         <svg ref={svgRef} className="er-svg" onMouseDown={(e) => onDown(e)} onMouseMove={onMove} onMouseUp={() => { drag.current = null }} onMouseLeave={() => { drag.current = null }} onWheel={onWheel}>
           <g data-root="" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-            {relEls}
-            {boxes.map((b) => {
-              const p = pos[b.key]
-              if (!p) return null
-              const f = fkCols(b), u = uniqueCols(b)
-              const rows = rowsOf(b)
-              const match = q && fullName(b.t).toLowerCase().includes(q)
-              const nameMax = Math.floor((b.w - PAD_X * 2 - BADGE_W - 60) / NAME_CH)
-              return (
-                <g key={b.key} transform={`translate(${p.x} ${p.y})`} className={`er-box ${hover === b.key ? 'on' : ''} ${match ? 'match' : ''} ${(hover || hoverRel) && hover !== b.key && ![...hot].some((h) => h.startsWith(b.key + '|')) && !rels.some((r) => (r.from === b || r.to === b) && (r.from.key === hover || r.to?.key === hover)) ? 'dim' : ''}`}
-                  onMouseDown={(e) => onDown(e, b.key)} onMouseEnter={() => setHover(b.key)} onMouseLeave={() => setHover('')}
-                  onDoubleClick={() => onOpenTable(b.t)}>
-                  <rect width={b.w} height={height(b)} rx={8} className="er-body" />
-                  <path d={`M 0 8 Q 0 0 8 0 H ${b.w - 8} Q ${b.w} 0 ${b.w} 8 V ${HEAD_H} H 0 Z`} className="er-head" />
-                  <text x={PAD_X} y={22} className="er-title">{b.t.schema && <tspan className="er-schema">{b.t.schema}.</tspan>}{b.t.name}</text>
-                  <text x={b.w - PAD_X} y={22} textAnchor="end" className="er-count">{b.s.columns.length}</text>
-                  <title>{`${fullName(b.t)} · ${b.s.columns.length} columns · double-click to open`}</title>
-                  {rows.map((c, i) => {
-                    const isFk = f.has(c.name)
-                    const tag = c.primaryKey ? 'PK' : isFk ? 'FK' : u.has(c.name) ? 'UQ' : ''
-                    const isHot = hot.has(`${b.key}|${c.name.toLowerCase()}`)
-                    return (
-                      <g key={c.name} transform={`translate(0 ${HEAD_H + i * ROW_H})`} className={isHot ? 'er-row hot' : 'er-row'}>
-                        {i % 2 === 1 && <rect x={1} width={b.w - 2} height={ROW_H} className="er-stripe" />}
-                        {isHot && <rect x={1} width={b.w - 2} height={ROW_H} className="er-hotbg" />}
-                        {tag && <><rect x={PAD_X - 2} y={4} width={22} height={14} rx={3} className={`er-tag ${tag.toLowerCase()}`} /><text x={PAD_X + 9} y={14.5} textAnchor="middle" className="er-tag-text">{tag}</text></>}
-                        <text x={PAD_X + BADGE_W} y={15} className={`er-col ${c.primaryKey ? 'pk' : ''} ${c.nullable ? 'null' : ''}`}>{c.name.length > nameMax ? c.name.slice(0, nameMax - 1) + '…' : c.name}{!c.nullable && !c.primaryKey ? <tspan className="er-req"> *</tspan> : null}</text>
-                        <text x={b.w - PAD_X} y={15} textAnchor="end" className="er-type">{c.dataType.length > 22 ? c.dataType.slice(0, 21) + '…' : c.dataType}{c.nullable ? '?' : ''}</text>
-                        <title>{`${c.name} ${c.dataType}${c.nullable ? ' NULL' : ' NOT NULL'}${c.primaryKey ? ' · primary key' : ''}${isFk ? ' · foreign key' : ''}${c.defaultValue != null ? ` · default ${c.defaultValue}` : ''}${c.autoIncrement ? ' · auto increment' : ''}`}</title>
-                      </g>
-                    )
-                  })}
-                </g>
-              )
-            })}
+            {scene}
           </g>
         </svg>
         <div className="er-legend" data-noexport="">
@@ -493,7 +531,7 @@ export function ErDiagram({ onOpenTable }: { onOpenTable: (t: TableInfo) => void
             {rels.length === 0 && <p className="muted small-text pad">No foreign keys found in these tables.</p>}
             <ul>
               {rels.filter((r) => r.to).map((r) => (
-                <li key={r.id} className={hoverRel === r.id ? 'on' : ''} onMouseEnter={() => setHoverRel(r.id)} onMouseLeave={() => setHoverRel('')} onClick={() => focus(r.from.key)}>
+                <li key={r.id} className={hoverRelNow === r.id ? 'on' : ''} onMouseEnter={() => setHoverRel(r.id)} onMouseLeave={() => setHoverRel('')} onClick={() => focus(r.from.key)}>
                   <div className="er-rel-line"><strong>{r.from.t.name}</strong><span className="er-card">{r.one ? '1 : 1' : 'N : 1'}</span><strong>{r.to!.t.name}</strong></div>
                   <div className="muted small-text mono">{r.fk.columns.join(', ')} → {r.fk.refColumns.join(', ')}</div>
                   {r.fk.name && <div className="muted small-text">{r.fk.name}{r.optional ? ' · optional' : ''}</div>}
