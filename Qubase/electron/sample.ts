@@ -6,7 +6,7 @@ import fs from 'node:fs'
 /** Creates (once) a small shop database in the app's data folder and returns its path. */
 export function sampleDatabase(): string {
   const file = path.join(app.getPath('userData'), 'sample-shop.db')
-  if (fs.existsSync(file)) return file
+  if (fs.existsSync(file)) { addMapTables(file); return file }
   const db = new Database(file)
   try {
     db.exec(`
@@ -48,5 +48,43 @@ export function sampleDatabase(): string {
       }
     })()
   } finally { db.close() }
+  addMapTables(file)
   return file
+}
+
+// Map view examples, one per format: lat / lng columns, WKT text and GeoJSON text.
+// Added to older sample files too, so existing users get them.
+const CITIES: [string, string, number, number][] = [
+  ['London', 'United Kingdom', 51.5074, -0.1278], ['Lahore', 'Pakistan', 31.5204, 74.3587], ['Berlin', 'Germany', 52.52, 13.405],
+  ['Toronto', 'Canada', 43.6532, -79.3832], ['Dubai', 'United Arab Emirates', 25.2048, 55.2708], ['Madrid', 'Spain', 40.4168, -3.7038],
+  ['Sydney', 'Australia', -33.8688, 151.2093], ['Karachi', 'Pakistan', 24.8607, 67.0011], ['Paris', 'France', 48.8566, 2.3522], ['Austin', 'United States', 30.2672, -97.7431]
+]
+
+function addMapTables(file: string) {
+  const db = new Database(file)
+  try {
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'stores'").get()) return
+    db.exec(`
+      -- Points as a pair of latitude / longitude columns
+      CREATE TABLE stores (id INTEGER PRIMARY KEY, city TEXT NOT NULL, country TEXT, lat REAL NOT NULL, lng REAL NOT NULL, opened DATE);
+      -- Lines as WKT text (what ST_AsText returns in PostGIS, SQL Server, MySQL)
+      CREATE TABLE delivery_routes (id INTEGER PRIMARY KEY, name TEXT NOT NULL, from_city TEXT, to_city TEXT, route_wkt TEXT NOT NULL);
+      -- Polygons as GeoJSON text (what ST_AsGeoJSON returns)
+      CREATE TABLE delivery_zones (id INTEGER PRIMARY KEY, city TEXT NOT NULL, fee REAL, zone_geojson TEXT NOT NULL);
+    `)
+    db.transaction(() => {
+      const is = db.prepare('INSERT INTO stores (city, country, lat, lng, opened) VALUES (?, ?, ?, ?, ?)')
+      CITIES.forEach(([c, k, la, ln], i) => is.run(c, k, la, ln, `202${i % 5}-0${1 + (i % 9)}-15`))
+      const pt = (c: string) => CITIES.find((x) => x[0] === c)!
+      const ir = db.prepare('INSERT INTO delivery_routes (name, from_city, to_city, route_wkt) VALUES (?, ?, ?, ?)')
+      const routes: string[][] = [['London', 'Paris', 'Berlin'], ['Madrid', 'Paris', 'London'], ['Lahore', 'Karachi', 'Dubai'], ['Toronto', 'Austin'], ['Dubai', 'Sydney'], ['London', 'Toronto']]
+      for (const r of routes) ir.run(r.join(' → '), r[0], r[r.length - 1], `LINESTRING (${r.map((c) => `${pt(c)[3]} ${pt(c)[2]}`).join(', ')})`)
+      const iz = db.prepare('INSERT INTO delivery_zones (city, fee, zone_geojson) VALUES (?, ?, ?)')
+      for (const [c, , la, ln] of CITIES) {
+        // A rough hexagon around the city, about 60 km across
+        const ring = Array.from({ length: 7 }, (_, k) => { const a = (k % 6) * Math.PI / 3; return [+(ln + 0.45 * Math.cos(a)).toFixed(4), +(la + 0.3 * Math.sin(a)).toFixed(4)] })
+        iz.run(c, 4.99, JSON.stringify({ type: 'Polygon', coordinates: [ring] }))
+      }
+    })()
+  } finally { db.close() }
 }

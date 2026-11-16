@@ -32,7 +32,8 @@ const CATEGORIES: [Category, string][] = [['all', 'All'], ['sql', 'Relational'],
 const CATEGORY: Record<DbKind, Category> = {
   postgres: 'sql', mysql: 'sql', mariadb: 'sql', mssql: 'sql', oracle: 'sql', cockroach: 'sql', timescale: 'sql', yugabyte: 'sql', tidb: 'sql',
   azuresql: 'cloud', redshift: 'cloud', snowflake: 'cloud', bigquery: 'cloud', dynamodb: 'cloud', clickhouse: 'cloud', trino: 'cloud',
-  mongodb: 'nosql', redis: 'nosql', cassandra: 'nosql',
+  supabase: 'cloud', neon: 'cloud', planetscale: 'cloud',
+  mongodb: 'nosql', redis: 'nosql', cassandra: 'nosql', elasticsearch: 'nosql', opensearch: 'nosql',
   sqlite: 'file', duckdb: 'file', libsql: 'file'
 } as Record<DbKind, Category>
 

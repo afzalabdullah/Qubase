@@ -2,6 +2,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'rea
 import type { ColumnInfo, QueryResult } from '../../shared/types'
 import { IconArrowDown, IconArrowUp, IconKey } from './Icons'
 import { cellText } from '../util'
+import { maskCell } from '../mask'
 
 export type Sort = { col: string; dir: 'asc' | 'desc' } | null
 
@@ -77,7 +78,7 @@ const Row = memo(function Row({ i, displayIndex, columns, row, edits, selCol, ed
         const changed = col in edits
         const value = changed ? edits[col] : row[col]
         const isNull = value === null || value === undefined
-        const text = isNull ? 'NULL' : cellText(value)
+        const text = isNull ? 'NULL' : changed ? cellText(value) : maskCell(col, cellText(value))
         return (
           <td
             key={`${ci}:${col}`}

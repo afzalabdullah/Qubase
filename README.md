@@ -5,7 +5,7 @@
 <h1 align="center">Qubase</h1>
 
 <p align="center">
-  One app for every database: query, design and explore 22 databases with an AI assistant that writes in your editor.
+  One app for every database: query, design and explore 27 databases with an AI assistant that writes in your editor.
 </p>
 
 <p align="center">
@@ -77,7 +77,7 @@ It runs on your own computer. There is no Qubase account and no Qubase server: y
 | Transactions | Begin, Commit and Rollback buttons |
 | Query plan | Ctrl+L draws the estimated plan as a tree with each step's cost |
 | Stop | Cancels the running query on the server |
-| Saved queries and history | Re-open anything you wrote or ran |
+| Saved queries and history | Re-open anything you wrote or ran; saving again keeps earlier versions to go back to |
 | Notebooks | Query cells and Markdown notes in one document |
 
 ### Building and designing
@@ -98,6 +98,7 @@ It runs on your own computer. There is no Qubase account and no Qubase server: y
 | Import | CSV / TSV, Excel or JSON with column mapping and a preview first |
 | Charts and dashboards | Turn a result into a bar, line or pie chart and pin it to a dashboard |
 | Pivot and totals | Pivot a result; sum, average, min and max of the selection |
+| Map view | Draws GeoJSON, WKT or lat / lng columns as points, lines and shapes (no map tiles, nothing leaves the PC) |
 | Compare results | Pin a result, run another query and see changed, new and removed rows |
 | Test data | Generate realistic rows (names, emails, dates, amounts) as a script to review |
 
@@ -106,6 +107,8 @@ It runs on your own computer. There is no Qubase account and no Qubase server: y
 |---|---|
 | Scheduled reports | Run a query every N minutes, every day or on weekdays and save it as Excel, CSV, JSON or HTML, with a notification when done (while the app is open) |
 | Team folder | Share queries and connections through a shared folder (OneDrive, Dropbox, network drive); passwords are never shared |
+| Command line | `Qubase.exe --run report.sql --conn "Shop" --out report.xlsx` runs a query without the window (Task Scheduler, cron, CI) |
+| Migrations | Shows applied migrations from Flyway, Liquibase, Prisma, Rails, Alembic, Django, Knex, EF and more |
 | Workspaces | Save your open tabs and pick up where you left off |
 
 ### Safety
@@ -114,6 +117,7 @@ It runs on your own computer. There is no Qubase account and no Qubase server: y
 | Production flag | A red banner across the window and a confirmation before every change |
 | Read-only flag | Blocks INSERT, UPDATE, DELETE, CREATE, ALTER, DROP and other changes |
 | Missing WHERE check | UPDATE or DELETE without WHERE is stopped before it runs |
+| Mask personal data | Hides emails, phone and card numbers and similar columns in the grid, for screen sharing |
 | Destructive actions | Truncate and Drop only open a script; nothing runs until you press Run |
 
 ### Server tools
@@ -126,15 +130,16 @@ A complete, detailed feature list is in [`Qubase/README.md`](Qubase/README.md).
 
 ## Supported databases
 
-22 databases, defined in [`Qubase/shared/drivers.ts`](Qubase/shared/drivers.ts).
+27 databases, defined in [`Qubase/shared/drivers.ts`](Qubase/shared/drivers.ts).
 
 | Group | Databases |
 |---|---|
-| **Relational** (12) | PostgreSQL, MySQL, SQL Server, Oracle (thin mode, no client install), SQLite, MariaDB, Azure SQL, CockroachDB, YugabyteDB, TiDB, TimescaleDB, LibSQL / Turso |
+| **Relational** (15) | PostgreSQL, Supabase, Neon, PlanetScale, MySQL, SQL Server, Oracle (thin mode, no client install), SQLite, MariaDB, Azure SQL, CockroachDB, YugabyteDB, TiDB, TimescaleDB, LibSQL / Turso |
+| **Search** (2) | Elasticsearch and OpenSearch (SQL over their REST API, indices as tables) |
 | **Document and key-value** (4) | MongoDB (shell-style queries such as `db.users.find({ age: { $gt: 30 } })`), Redis (key browser and command console), DynamoDB (PartiQL, works with DynamoDB Local), Cassandra / ScyllaDB (CQL) |
 | **Warehouse and analytics** (6) | Snowflake, BigQuery (service-account key or gcloud sign-in), Redshift, ClickHouse, DuckDB, Trino / Presto |
 
-BigQuery, DynamoDB, ClickHouse and Trino are read-only in the results grid.
+BigQuery, DynamoDB, ClickHouse, Trino, Elasticsearch and OpenSearch are read-only in the results grid.
 
 ## AI assistant
 
@@ -142,6 +147,7 @@ The AI assistant lives next to your editor and knows what you are working on: yo
 
 - **Ask in plain words** ("why does line 3 fail?", "total spend per city") and the answer is typed into your editor, line by line, or replaces the whole query.
 - **Run it with one click** and keep the result next to the chat.
+- **Explore data**: the AI runs read-only queries by itself (up to 6 steps) to find an answer; anything that changes data still needs your click.
 - **Every chat is saved**, with the results of the queries you ran.
 
 **Providers** (pick one in Settings, the key is stored encrypted):
@@ -164,7 +170,7 @@ The provider list is in [`Qubase/shared/aiProviders.ts`](Qubase/shared/aiProvide
 
 - **No account and no Qubase server.** Connections, saved queries and settings live on your computer.
 - **Secrets are encrypted** with your operating system's secure storage: database passwords, SSH passwords, key passphrases and AI keys.
-- **What the AI sees:** table and column names and the query you are working on. Row data is only sent when you ask the AI about a result.
+- **What the AI sees:** table and column names and the query you are working on. Row data is only sent when you ask the AI about a result, or the first rows of its own queries in Explore mode.
 - **Logs stay local.** Errors are written to a local log file and never uploaded.
 
 ## Repository layout
@@ -252,8 +258,10 @@ Without them the installer is unsigned and Windows SmartScreen shows a warning.
 3. Create the GitHub release and upload the installer (needs the [GitHub CLI](https://cli.github.com/)):
 
 ```bash
-gh release create v0.1.0 "Qubase/release/Qubase-Setup-0.1.0.exe" -R afzalabdullah/Qubase --title "Qubase 0.1.0" --notes "What's new in this version"
+gh release create v0.1.0 "Qubase/release/Qubase-Setup-0.1.0.exe" "Qubase/release/Qubase-Setup-0.1.0.exe.blockmap" "Qubase/release/latest.yml" -R afzalabdullah/Qubase --title "Qubase 0.1.0" --notes "What's new in this version"
 ```
+
+Upload `latest.yml` and the `.blockmap` too: installed copies read them to find and download the update (auto-update).
 
 To replace the file on an existing release:
 
@@ -321,7 +329,7 @@ Saved data from earlier app names (DB Studio, Datahive) is picked up automatical
 
 ## Roadmap
 
-- macOS and Linux builds
+- macOS and Linux builds (`npm run dist:mac` on a Mac, `npm run dist:linux` on Linux)
 - Code-signed installer
 - Plugins
 

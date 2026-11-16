@@ -597,6 +597,13 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
                       <button onClick={() => { setText(q.text); setMenu('') }} title={q.text}>
                         <span className="hist-text"><strong>{q.name}</strong> <span className="muted">{q.text.replace(/\s+/g, ' ').slice(0, 60)}</span></span>
                       </button>
+                      {!!q.versions?.length && (
+                        <select className="saved-versions" value="" title={`${q.versions.length} earlier versions: pick one to open it in the editor`}
+                          onChange={(e) => { const v = q.versions![Number(e.target.value)]; if (v) { setText(v.text); setMenu(''); onStatus(`Opened the version of “${q.name}” from ${new Date(v.at).toLocaleString()}; save it again to restore it`) } }}>
+                          <option value="" disabled>{q.versions.length} versions</option>
+                          {q.versions.map((v, k) => <option key={k} value={k}>{new Date(v.at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })} · {v.text.replace(/\s+/g, ' ').slice(0, 40)}</option>)}
+                        </select>
+                      )}
                       <button className="icon-btn" title="Delete" onClick={() => setSavedList(deleteSavedQuery(q.id))}><IconTrash width={13} height={13} /></button>
                     </div>
                   ))}

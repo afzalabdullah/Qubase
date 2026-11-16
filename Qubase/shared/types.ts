@@ -175,6 +175,7 @@ export interface Schedule {
   history?: ScheduleRun[]
 }
 
+export interface UpdateStatus { state: 'idle' | 'checking' | 'available' | 'none' | 'downloading' | 'ready' | 'error'; current: string; latest?: string; percent?: number; notes?: string; error?: string }
 export interface UpdateInfo { current: string; latest: string; available: boolean; download: string }
 export interface LicenceInfo { valid: boolean; error?: string; name?: string; email?: string; plan?: string; seats?: number; expires?: string }
 /** Shared through the team folder */
@@ -308,6 +309,10 @@ export interface DbApi {
   onSchedulesChanged(fn: () => void): () => void
   pickFolder(): Promise<string | null>
   appVersion(): Promise<string>
+  updateCheck(url?: string): Promise<UpdateStatus>
+  updateDownload(): Promise<UpdateStatus>
+  updateInstall(): Promise<void>
+  onUpdateStatus(fn: (s: UpdateStatus) => void): () => void
   checkForUpdate(url: string): Promise<UpdateInfo>
   getLicence(): Promise<LicenceInfo>
   setLicence(key: string): Promise<LicenceInfo>

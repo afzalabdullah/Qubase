@@ -1324,3 +1324,31 @@ button, input, select, textarea { font-family: inherit; }
 .ai-ran-table th, .ai-ran-table td { border-bottom: 1px solid var(--border); padding: 2px 8px 2px 0; text-align: left; white-space: nowrap; }
 .ai-ran-table th { color: var(--text-3); }
 .ai-chat [hidden] { display: none !important; }
+.saved-versions { max-width: 110px; font-size: 11.5px; margin-right: 4px; background: var(--bg-2); color: var(--text-2); border: 1px solid var(--border); border-radius: 5px; padding: 2px 4px; }
+
+/* Map view of geographic results */
+.map-view { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 10px; gap: 6px; }
+.map-stage { position: relative; flex: 1; min-height: 260px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.map-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.map-stage svg:active { cursor: grabbing; }
+.map-sea { fill: #dcebf5; }
+.map-land path { fill: #f4f1ea; stroke: #b9b3a6; stroke-width: .6; vector-effect: non-scaling-stroke; }
+.map-land path:hover { fill: #ebe6da; }
+[data-theme="dark"] .map-sea { fill: #142231; }
+[data-theme="dark"] .map-land path { fill: #26292f; stroke: #454a53; }
+[data-theme="dark"] .map-land path:hover { fill: #2e3239; }
+.map-pt { fill: var(--accent); stroke: #fff; cursor: pointer; }
+.map-line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; cursor: pointer; }
+.map-line.on { stroke-width: 4.5; }
+.map-poly { fill: var(--accent); fill-opacity: .22; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: pointer; }
+.map-poly.on { fill-opacity: .45; }
+.map-zoom { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 2px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.map-zoom .icon-btn { width: 26px; height: 26px; font-size: 15px; line-height: 1; }
+.map-row { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; color: var(--text-2); }
+.map-row b { color: var(--text-3); font-weight: 600; margin-right: 4px; }
+/* Migrations page */
+.migrations { height: 100%; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
+.migrations .tool-head h2 { margin: 0 0 4px; font-size: 17px; }
+.migrations .tool-head p { margin: 0 0 8px; max-width: 760px; }
+.migrations-section h3 { font-size: 14px; margin: 0 0 6px; }
+.migrations-result { height: 320px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }

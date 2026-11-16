@@ -25,5 +25,6 @@ export function createClient(config: ConnectionConfig): DbClient {
     case 'cassandra': return new (require('./cassandra').CassandraClient)(config)
     case 'dynamodb': return new (require('./dynamodb').DynamoDbClient)(config)
     case 'trino': return new (require('./trino').TrinoClient)(config)
+    case 'elasticsearch': return new (require('./elasticsearch').ElasticClient)(config, config.kind === 'opensearch' ? 'opensearch' : 'elastic')
   }
 }

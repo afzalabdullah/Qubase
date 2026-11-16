@@ -1,3 +1,4 @@
+import { setMasking } from './mask'
 // App settings, kept per computer in local storage.
 import { createContext, useContext, useEffect, useState } from 'react'
 import { DEFAULT_SHORTCUTS, ShortcutAction } from './shortcuts'
@@ -33,6 +34,8 @@ export interface Settings {
   snippets: boolean
   /** Ask for :name parameters when running */
   queryParams: boolean
+  /** Hide emails, phone and card numbers and other personal data in the results grid */
+  maskData: boolean
   /** Shared folder for team queries and connections ('' = off) */
   teamFolder: string
   /** Update server for auto-update ('' = off) */
@@ -86,6 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   indentWidth: 2,
   snippets: true,
   queryParams: true,
+  maskData: false,
   teamFolder: '',
   updateUrl: '',
   accentCustom: '#f2620f',
@@ -184,6 +188,7 @@ export function readSettings(): Settings {
 
 /** Apply font size, theme and accent to the page */
 export function applySettings(s: Settings) {
+  setMasking(!!s.maskData)
   const root = document.documentElement
   const theme = resolvedTheme(s)
   root.dataset.theme = theme
