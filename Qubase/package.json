@@ -106,7 +106,7 @@
           ]
         }
       ],
-      "artifactName": "Qubase-Setup-${version}.${ext}"
+      "artifactName": "Qubase-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,

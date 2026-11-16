@@ -47,7 +47,7 @@ It runs on your own computer. There is no Qubase account and no Qubase server: y
 ## Download and install
 
 1. Open the [latest release](https://github.com/afzalabdullah/Qubase/releases/latest).
-2. Download `Qubase-Setup-<version>.exe`.
+2. Download `Qubase-Setup.exe`.
 3. Run it and follow the installer.
 
 > **Windows SmartScreen:** the installer is not code-signed yet, so Windows may show *"Windows protected your PC"*. Click **More info → Run anyway**.
@@ -241,7 +241,7 @@ cd Qubase
 npm run dist:win
 ```
 
-The output is `Qubase/release/Qubase-Setup-<version>.exe` (plus a `.blockmap`). The version comes from `"version"` in `Qubase/package.json`.
+The output is `Qubase/release/Qubase-Setup.exe` (plus a `.blockmap` and `latest.yml`). The file name has no version, so the website's download link always points at the newest release. The version comes from `"version"` in `Qubase/package.json`.
 
 The step *"searching for node modules"* can take several minutes because of the many database drivers; it is not stuck.
 
@@ -266,7 +266,7 @@ Without them the installer is unsigned and Windows SmartScreen shows a warning.
 3. Create the GitHub release and upload the installer (needs the [GitHub CLI](https://cli.github.com/)):
 
 ```bash
-gh release create v0.1.0 "Qubase/release/Qubase-Setup-0.1.0.exe" "Qubase/release/Qubase-Setup-0.1.0.exe.blockmap" "Qubase/release/latest.yml" -R afzalabdullah/Qubase --title "Qubase 0.1.0" --notes "What's new in this version"
+gh release create v0.1.0 "Qubase/release/Qubase-Setup.exe" "Qubase/release/Qubase-Setup.exe.blockmap" "Qubase/release/latest.yml" -R afzalabdullah/Qubase --title "Qubase 0.1.0" --notes "What's new in this version"
 ```
 
 Upload `latest.yml` and the `.blockmap` too: installed copies read them to find and download the update (auto-update).
@@ -274,10 +274,10 @@ Upload `latest.yml` and the `.blockmap` too: installed copies read them to find 
 To replace the file on an existing release:
 
 ```bash
-gh release upload v0.1.0 "Qubase/release/Qubase-Setup-0.1.0.exe" -R afzalabdullah/Qubase --clobber
+gh release upload v0.1.0 "Qubase/release/Qubase-Setup.exe" -R afzalabdullah/Qubase --clobber
 ```
 
-4. If the version changed, update `DOWNLOAD_URL` in [`Qubase/landing/src/data/site.ts`](Qubase/landing/src/data/site.ts), since the download link contains the file name.
+4. The website's download link (`DOWNLOAD_URL` in [`Qubase/landing/src/data/site.ts`](Qubase/landing/src/data/site.ts)) uses `releases/latest/download/Qubase-Setup.exe`, so it needs no change for a new version.
 
 ## Landing page
 

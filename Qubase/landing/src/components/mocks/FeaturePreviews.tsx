@@ -167,3 +167,66 @@ export function UrlPreview() {
     </div>
   )
 }
+
+export function ExplorePreview() {
+  return (
+    <div className="w-full max-w-sm space-y-2 text-sm">
+      <div className="ml-auto w-fit rounded-lg bg-ember px-3 py-1.5 text-white">Which city spends the most?</div>
+      {[['Step 1', 'SELECT city, COUNT(*) … GROUP BY city', '10 rows'], ['Step 2', 'SELECT c.city, SUM(total) … ORDER BY 2 DESC', '5 rows']].map(([s, q, r]) => (
+        <div key={s} className="rounded-md border border-line bg-surface px-3 py-1.5">
+          <div className="flex justify-between text-xs text-muted"><span>{s} · read-only, ran by itself</span><span>{r}</span></div>
+          <div className="truncate font-mono text-xs">{q}</div>
+        </div>
+      ))}
+      <div className="rounded-lg border border-line bg-surface px-3 py-2"><strong>Berlin</strong>, with 15 customers and the highest total spend.</div>
+    </div>
+  )
+}
+
+export function MapPreview() {
+  const pts: [number, number][] = [[49, 34], [62, 44], [75, 30], [26, 38], [88, 47], [46, 42], [94, 78], [83, 49], [50, 36], [20, 50]]
+  return (
+    <div className="relative h-44 w-full max-w-md overflow-hidden rounded-lg border border-line bg-sky-100 dark:bg-[#142231]" role="img" aria-label="World map with points and a route">
+      <svg viewBox="0 0 100 60" className="absolute inset-0 size-full" preserveAspectRatio="none">
+        <path d="M8 20 Q14 10 26 14 L32 22 Q30 32 22 40 L18 52 Q12 44 10 34 Z M40 16 Q52 8 70 12 L92 16 Q98 24 92 30 L82 34 Q74 40 66 36 L58 42 Q50 52 46 40 L42 30 Z M84 46 Q92 44 96 50 Q92 56 84 54 Z" className="fill-[#f4f1ea] stroke-[#c9c3b5] dark:fill-[#26292f] dark:stroke-[#454a53]" strokeWidth=".4" />
+        <polyline points="49,20 50,22 58,19" fill="none" className="stroke-ember" strokeWidth="1" />
+        {pts.map(([x, y], i) => <circle key={i} cx={x} cy={y * 0.6} r="1.4" className="fill-ember stroke-white" strokeWidth=".4" />)}
+      </svg>
+    </div>
+  )
+}
+
+export function ProfilePreview() {
+  const rows: [string, number, string, string][] = [['email', 100, '60 · unique', 'nora.khan0@…'], ['city', 100, '5', 'Berlin 15 · Sydney 13'], ['phone', 72, '43', '+92 300 … 2'], ['joined', 96, '58', '2025-03-02 2']]
+  return (
+    <div className="w-full max-w-md overflow-hidden rounded-lg border border-line bg-surface text-xs">
+      <div className="grid grid-cols-[1fr_1.1fr_1fr_1.6fr] gap-2 border-b border-line px-3 py-1.5 font-semibold text-muted"><span>Column</span><span>Filled</span><span>Distinct</span><span>Most common</span></div>
+      {rows.map(([c, f, d, t]) => (
+        <div key={c} className="grid grid-cols-[1fr_1.1fr_1fr_1.6fr] items-center gap-2 border-b border-line px-3 py-1.5 last:border-0">
+          <span className="font-medium">{c}</span>
+          <span className="flex items-center gap-1.5"><span className="h-1.5 w-12 overflow-hidden rounded bg-line"><span className="block h-full bg-ember" style={{ width: `${f}%` }} /></span>{f}%</span>
+          <span>{d}</span><span className="truncate font-mono text-muted">{t}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function CliPreview() {
+  return (
+    <div className="w-full max-w-md rounded-lg bg-[#16181d] p-3 font-mono text-xs text-[#d6d9de]">
+      <div><span className="text-emerald-400">&gt;</span> Qubase.exe --run sales.sql --conn "Shop" --out sales.xlsx</div>
+      <div className="text-[#8b919c]">Wrote 1,284 rows to C:\Reports\sales.xlsx in 412 ms</div>
+    </div>
+  )
+}
+
+export function MigrationsPreview() {
+  return (
+    <div className="w-full max-w-sm divide-y divide-line rounded-lg border border-line bg-surface text-sm">
+      {[['V3__add_orders_index', 'today'], ['V2__customers_phone', '3 days ago'], ['V1__init', 'last month']].map(([m, t]) => (
+        <div key={m} className="flex justify-between px-3 py-1.5"><span className="font-mono text-xs">{m}</span><span className="text-xs text-muted">{t}</span></div>
+      ))}
+    </div>
+  )
+}
