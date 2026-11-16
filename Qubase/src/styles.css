@@ -1352,3 +1352,16 @@ button, input, select, textarea { font-family: inherit; }
 .migrations .tool-head p { margin: 0 0 8px; max-width: 760px; }
 .migrations-section h3 { font-size: 14px; margin: 0 0 6px; }
 .migrations-result { height: 320px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+
+/* Data profiling */
+.profile-view { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; gap: 8px; }
+.profile-head { display: flex; align-items: center; gap: 6px; }
+.profile-table-wrap { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.profile-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.profile-table th { position: sticky; top: 0; background: var(--bg-2); text-align: left; font-weight: 600; color: var(--text-2); padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.profile-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.profile-bar { width: 90px; height: 6px; border-radius: 3px; background: var(--bg-3, var(--border)); overflow: hidden; margin: 3px 0 4px; }
+.profile-bar span { display: block; height: 100%; background: var(--accent); }
+.profile-top { position: relative; padding: 1px 4px; margin-bottom: 1px; white-space: nowrap; min-width: 180px; }
+.profile-top-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); opacity: .13; border-radius: 3px; }
+.profile-top > :not(.profile-top-bar) { position: relative; }

@@ -34,6 +34,8 @@ export interface Settings {
   snippets: boolean
   /** Ask for :name parameters when running */
   queryParams: boolean
+  /** AI suggestions as grey text while typing (Tab accepts) */
+  aiInline: boolean
   /** Hide emails, phone and card numbers and other personal data in the results grid */
   maskData: boolean
   /** Shared folder for team queries and connections ('' = off) */
@@ -90,6 +92,7 @@ export const DEFAULT_SETTINGS: Settings = {
   snippets: true,
   queryParams: true,
   maskData: false,
+  aiInline: false,
   teamFolder: '',
   updateUrl: '',
   accentCustom: '#f2620f',

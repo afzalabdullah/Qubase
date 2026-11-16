@@ -112,3 +112,12 @@ describe('ddl helpers', () => {
     expect(sqlLiteral(42)).toBe('42')
   })
 })
+
+import { limitSql } from '../src/components/ProfileView'
+describe('limitSql (profiling)', () => {
+  it('uses each engine\'s syntax', () => {
+    expect(limitSql('postgres', 'SELECT a FROM t', 5)).toBe('SELECT a FROM t LIMIT 5')
+    expect(limitSql('mssql', 'SELECT a FROM t', 5)).toBe('SELECT TOP 5 a FROM t')
+    expect(limitSql('oracle', 'SELECT a FROM t', 5)).toBe('SELECT a FROM t FETCH FIRST 5 ROWS ONLY')
+  })
+})

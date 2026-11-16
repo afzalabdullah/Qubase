@@ -24,6 +24,7 @@ const api: DbApi = {
   transaction: (id, action) => ipcRenderer.invoke('db:transaction', id, action),
   readImportFile: (file) => ipcRenderer.invoke('import:read', file),
   aiAsk: (req) => ipcRenderer.invoke('ai:ask', req),
+  aiComplete: (req) => ipcRenderer.invoke('ai:complete', req),
   aiHasKey: () => ipcRenderer.invoke('ai:hasKey'),
   aiSetKey: (key, model) => ipcRenderer.invoke('ai:setKey', key, model),
   aiGetConfig: () => ipcRenderer.invoke('ai:getConfig'),

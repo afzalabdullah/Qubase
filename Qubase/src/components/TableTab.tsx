@@ -1,3 +1,4 @@
+import { ProfileView } from './ProfileView'
 import { editorTheme } from '../editorThemes'
 import { useEffect, useMemo, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
@@ -35,6 +36,8 @@ interface Props {
 export function TableTab({ connId, table, canEdit, engine, dark, initialView = 'data', initialWhere, onStatus, onOpenQuery, onSchemaChanged, onOpenTable }: Props) {
   const [view, setView] = useState<TableView>(initialView)
   const noScript = engine === 'mongodb' || engine === 'redis'
+  // Profiling needs SQL with GROUP BY and COUNT(DISTINCT)
+  const canProfile = !['mongodb', 'redis', 'dynamodb', 'cassandra', 'elasticsearch'].includes(engine)
 
   return (
     <div className="table-tab">
@@ -42,6 +45,7 @@ export function TableTab({ connId, table, canEdit, engine, dark, initialView = '
         <button className={view === 'data' ? 'on' : ''} onClick={() => setView('data')}>Data</button>
         <button className={view === 'structure' ? 'on' : ''} onClick={() => setView('structure')}>{table.type === 'view' || noScript ? 'Columns' : 'Structure'}</button>
         {!noScript && <button className={view === 'script' ? 'on' : ''} onClick={() => setView('script')}>Script</button>}
+        {canProfile && <button className={view === 'profile' ? 'on' : ''} onClick={() => setView('profile')} title="Column statistics: empty values, distinct values, range, most common values and duplicate rows">Profile</button>}
       </div>
       {/* Data stays mounted so staged edits survive switching tabs */}
       <div className="subtab-body" style={{ display: view === 'data' ? 'flex' : 'none' }}>
@@ -52,6 +56,7 @@ export function TableTab({ connId, table, canEdit, engine, dark, initialView = '
           <TableDesigner connId={connId} engine={engine} table={table} onStatus={onStatus} onOpenQuery={onOpenQuery} onChanged={onSchemaChanged} />
         </div>
       )}
+      {view === 'profile' && <div className="subtab-body"><ProfileView connId={connId} engine={engine} table={table} /></div>}
       {view === 'script' && <div className="subtab-body"><ScriptView connId={connId} table={table} dark={dark} onOpenQuery={onOpenQuery} /></div>}
     </div>
   )

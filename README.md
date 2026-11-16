@@ -97,6 +97,7 @@ It runs on your own computer. There is no Qubase account and no Qubase server: y
 | Export | Excel, CSV, JSON, SQL INSERT, Markdown or HTML |
 | Import | CSV / TSV, Excel or JSON with column mapping and a preview first |
 | Charts and dashboards | Turn a result into a bar, line or pie chart and pin it to a dashboard |
+| Data profiling | Profile tab on every table: filled %, distinct values, min / max, most common values and duplicate rows |
 | Pivot and totals | Pivot a result; sum, average, min and max of the selection |
 | Map view | Draws GeoJSON, WKT or lat / lng columns as points, lines and shapes (no map tiles, nothing leaves the PC) |
 | Compare results | Pin a result, run another query and see changed, new and removed rows |
@@ -147,6 +148,7 @@ The AI assistant lives next to your editor and knows what you are working on: yo
 
 - **Ask in plain words** ("why does line 3 fail?", "total spend per city") and the answer is typed into your editor, line by line, or replaces the whole query.
 - **Run it with one click** and keep the result next to the chat.
+- **Suggestions while you type** (optional, Settings → Editor): grey text finishes the line; Tab accepts, Esc dismisses.
 - **Explore data**: the AI runs read-only queries by itself (up to 6 steps) to find an answer; anything that changes data still needs your click.
 - **Every chat is saved**, with the results of the queries you ran.
 
@@ -228,6 +230,7 @@ npm install
 | `npm start` | Production build, then launch the app |
 | `npm run build` | Compile the main process and build the UI into `dist/` and `dist-electron/` |
 | `npm run typecheck` | Type-check the UI and the main process |
+| `npm test` | Unit tests (Vitest) |
 | `npm run dist:win` | Build the Windows installer into `release/` |
 | `npm run dist:dir` | Build an unpacked app folder only (faster, for testing) |
 
@@ -252,6 +255,11 @@ $env:CSC_KEY_PASSWORD = "your-pfx-password"
 Without them the installer is unsigned and Windows SmartScreen shows a warning.
 
 ## Publishing a release
+
+**Automatic (recommended):** bump `"version"` in `Qubase/package.json`, commit, then push a tag such as `git tag v0.2.0 && git push origin v0.2.0`. The *Release* GitHub Action builds Windows, macOS and Linux installers and attaches them (with the `latest*.yml` files auto-update reads) to a GitHub release. Every push and pull request also runs the *CI* action: type-check, tests and build.
+
+**By hand:**
+
 
 1. Bump `"version"` in `Qubase/package.json`.
 2. Build: `npm run dist:win`.

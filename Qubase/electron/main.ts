@@ -187,6 +187,7 @@ ipcMain.handle('db:transaction', async (_e, id: string, action: TxAction) => {
 })
 ipcMain.handle('import:read', (_e, file: string) => readImportFile(file))
 ipcMain.handle('ai:ask', (_e, req: AiRequest) => ai.ask(req))
+ipcMain.handle('ai:complete', (_e, req) => ai.complete(req))
 ipcMain.handle('ai:hasKey', () => ai.hasKey())
 ipcMain.handle('ai:setKey', (_e, key: string, model: string) => ai.setKey(key, model))
 ipcMain.handle('ai:getConfig', () => ai.getConfig())

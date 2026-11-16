@@ -27,7 +27,7 @@ export type SettingsSection = typeof SETTINGS_SECTIONS[number][0]
 /** Which settings each section owns, for its Reset button */
 const SECTION_KEYS: Partial<Record<SettingsSection, (keyof Settings)[]>> = {
   appearance: ['theme', 'accent', 'accentCustom', 'railColor', 'sidebarColor', 'statusColor', 'uiFont', 'uiSize', 'monoFont', 'fontSize', 'editorTheme', 'radius', 'density'],
-  editor: ['runCurrentStatement', 'queryParams', 'restoreTabs'],
+  editor: ['runCurrentStatement', 'queryParams', 'restoreTabs', 'aiInline'],
   formatting: ['keywordCase', 'indentWidth', 'snippets'],
   shortcuts: ['shortcuts'],
   results: ['rowLimit', 'pageSize'],
@@ -406,6 +406,9 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
               <select value={s.indentWidth} onChange={(e) => set({ indentWidth: Number(e.target.value) as 2 | 4 })}>
                 <option value={2}>2 spaces</option><option value={4}>4 spaces</option>
               </select>
+            </Row>
+            <Row label="AI suggestions while typing" help="After a short pause, the AI suggests how to finish the line as grey text: Tab accepts, Esc dismisses. Sends the query and table names to your AI provider each time, so it uses your AI credits.">
+              <Toggle checked={s.aiInline} onChange={(v) => set({ aiInline: v })} label="AI suggestions" />
             </Row>
             <Row label="Snippets while typing" help={<>Type <code>sel</code> and press Enter; Tab jumps between the blanks.</>}>
               <Toggle checked={s.snippets} onChange={(v) => set({ snippets: v })} label="Snippets" />

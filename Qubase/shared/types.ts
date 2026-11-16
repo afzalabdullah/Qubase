@@ -266,6 +266,8 @@ export interface DbApi {
   readImportFile(file: string): Promise<ImportData>
   /** AI assistant (the API key stays in the main process) */
   aiAsk(req: AiRequest): Promise<string>
+  /** Inline suggestion for the editor: text to insert at the cursor ('' when nothing fits) */
+  aiComplete(req: { engine: string; schema: string; before: string; after: string }): Promise<string>
   aiHasKey(): Promise<boolean>
   aiSetKey(key: string, model: string): Promise<void>
   /** Chosen AI provider and its settings (keys are never returned, only whether one is saved) */
