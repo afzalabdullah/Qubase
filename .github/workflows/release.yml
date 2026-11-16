@@ -32,23 +32,30 @@ jobs:
             name: linux
             target: --linux
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == matrix.name
+    env:
+      BUILD_THIS: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == matrix.name }}
     defaults:
       run:
         working-directory: Qubase
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - if: env.BUILD_THIS == 'true'
+        uses: actions/checkout@v4
+      - if: env.BUILD_THIS == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: Qubase/package-lock.json
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
+      - if: env.BUILD_THIS == 'true'
+        run: npm ci
+      - if: env.BUILD_THIS == 'true'
+        run: npm test
+      - if: env.BUILD_THIS == 'true'
+        run: npm run build
       # Code signing is optional: add CSC_LINK / CSC_KEY_PASSWORD (and Apple notarisation secrets) as repository secrets to sign.
       # An empty CSC_LINK is read as a file path (and fails on macOS), so it is only set when the secret exists
-      - shell: bash
+      - if: env.BUILD_THIS == 'true'
+        shell: bash
         run: |
           if [ -z "$SIGN_LINK" ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false; else export CSC_LINK="$SIGN_LINK" CSC_KEY_PASSWORD="$SIGN_PASSWORD"; fi
           npx electron-builder ${{ matrix.target }} --publish always
