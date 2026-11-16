@@ -5,6 +5,7 @@ import { Markdown } from '../markdown'
 import { aiProvider, type AiConfigView } from '../../shared/aiProviders'
 import { clearChats, deleteChat, getChat, listChats, saveChat, type ChatMsg, type SavedChat } from '../aiChats'
 import { cellText } from '../util'
+import { readOnlyCode } from '../readOnly'
 
 /** What happened when SQL from an answer was run */
 export interface RunOutcome { rows?: number; ms?: number; error?: string; preview?: { columns: string[]; rows: unknown[][] } }
@@ -64,7 +65,11 @@ function segments(text: string): { kind: 'text' | 'code'; body: string; open?: b
   return out.filter((s) => s.kind === 'code' || s.body.trim())
 }
 
+const MAX_STEPS = 6
+const EXPLORE_RULES = `[Explore mode] You may look at the data yourself. To run a query, reply with exactly one read-only query in a code block and nothing that changes data; I will run it and send you the first rows. Use as few steps as possible (at most ${MAX_STEPS}). When you know the answer, reply with the answer and no code block, or with a final query I should run myself.`
+
 const STARTERS: [string, string][] = [
+  ['Find in the schema', 'Which tables and columns hold customer contact details? List them with a short reason for each.'],
   ['Explain this query', 'Explain what this query does, step by step.'],
   ['Fix the error', 'Fix the query so the last error goes away.'],
   ['Make it faster', 'Make this query faster and tell me which indexes would help.'],
@@ -89,7 +94,7 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
   }
   const [input, setInput] = useState('')
   const [busyId, setBusyId] = useState('')
-  const [live, setLive] = useState<LiveMode>(() => { try { return (localStorage.getItem(LIVE_KEY) as LiveMode) || 'replace' } catch { return 'replace' } })
+  const [liveMode, setLive] = useState<LiveMode>(() => { try { return (localStorage.getItem(LIVE_KEY) as LiveMode) || 'replace' } catch { return 'replace' } })
   const [useCtx, setUseCtx] = useState({ query: true, error: true })
   const [ctx, setCtx] = useState(() => editor.context())
   const [cfg, setCfg] = useState<AiConfigView | null>(null)
@@ -97,17 +102,23 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { window.db.aiGetConfig().then(setCfg).catch(() => {}) }, [])
-  useEffect(() => { try { localStorage.setItem(LIVE_KEY, live) } catch { /* ignore */ } }, [live])
+  useEffect(() => { try { localStorage.setItem(LIVE_KEY, liveMode) } catch { /* ignore */ } }, [liveMode])
   // Keep the context chips current while the panel is open
   useEffect(() => { const t = setInterval(() => setCtx(editor.context()), 700); return () => clearInterval(t) }, [editor])
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }) }, [msgs])
   useEffect(() => () => { if (busyId) window.db.aiStop(busyId) }, [busyId])
 
-  const send = async (text: string) => {
+  const [explore, setExplore] = useState(() => { try { return localStorage.getItem('aiExplore') === '1' } catch { return false } })
+  useEffect(() => { try { localStorage.setItem('aiExplore', explore ? '1' : '0') } catch { /* ignore */ } }, [explore])
+  const stopped = useRef(false)
+
+  const send = async (text: string, step = 0) => {
     const q = text.trim()
-    if (!q || busyId) return
+    if (!q || (busyId && step === 0)) return
+    if (step === 0) stopped.current = false
     const id = crypto.randomUUID()
-    const history: Msg[] = [...msgs.filter((m) => !m.error), { role: 'user', content: q, at: Date.now() }]
+    const live = explore ? 'off' as LiveMode : liveMode
+    const history: Msg[] = [...msgsRef.current.filter((m) => !m.error), { role: 'user', content: q, at: Date.now() }]
     setMsgs(() => [...history, { role: 'assistant', content: '', streaming: true, at: Date.now() }])
     setInput(''); setBusyId(id)
 
@@ -148,7 +159,9 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
         schema: await getSchema(),
         editor: useCtx.query ? { text: c.text, selection: c.selection, cursorLine: c.cursorLine, lineCount: c.lineCount } : { text: '' },
         lastError: useCtx.error ? lastError || undefined : undefined,
-        messages: history.map(({ role, content }) => ({ role, content }))
+        messages: history.map(({ role, content }) => ({ role, content: explore && role === 'user' && !content.startsWith('[Step') ? `${EXPLORE_RULES}
+
+${content}` : content }))
       })
       if (writer) await finishWriter()
       setMsgs((m) => m.map((x, i) => (i === m.length - 1 ? { ...x, streaming: false } : x)))
@@ -159,6 +172,15 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
       persist()
       inputRef.current?.focus()
     }
+    // Explore mode: run the read-only query from the answer and send the result back
+    const code = firstCode(answer)
+    if (explore && !stopped.current && code?.closed && readOnlyCode(code.code) && step < MAX_STEPS) {
+      const at = msgsRef.current.length - 1
+      const r = await runCode(at, code.code)
+      if (!r || stopped.current) return
+      const table = r.preview ? [r.preview.columns.join(' | '), ...r.preview.rows.slice(0, 20).map((row) => row.map((v) => (v === null || v === undefined ? 'NULL' : cellText(v).slice(0, 80))).join(' | '))].join('\n') : ''
+      await send(r.error ? `[Step ${step + 1}] The query failed: ${r.error}` : `[Step ${step + 1}] ${r.rows ?? 0} rows. First rows:\n${table || '(none)'}`, step + 1)
+    }
   }
 
   /** Run SQL from an answer and keep the outcome (rows, time, first rows or the error) in the chat */
@@ -167,9 +189,10 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
     if (!r) return
     setMsgs((m) => m.map((x, i) => (i === msgIndex ? { ...x, ran: { ...r, at: Date.now() } } : x)))
     persist()
+    return r
   }
 
-  const stop = () => { if (busyId) window.db.aiStop(busyId) }
+  const stop = () => { stopped.current = true; if (busyId) window.db.aiStop(busyId) }
   const openChatById = (c: SavedChat | null) => {
     stop()
     const id = c?.id ?? crypto.randomUUID()
@@ -284,8 +307,10 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
             {ctx.selection ? `Selection · ${ctx.selection.split('\n').length} lines` : ctx.text.trim() ? `Query · ${ctx.lineCount} lines · cursor L${ctx.cursorLine}` : 'Editor empty'}
           </button>
           {lastError && <button className={`ai-chip err ${useCtx.error ? 'on' : ''}`} onClick={() => setUseCtx((c) => ({ ...c, error: !c.error }))} title={lastError}>Last error</button>}
+          <button className={`ai-chip ${explore ? 'on' : ''}`} onClick={() => setExplore((x) => !x)}
+            title="Explore mode: the AI runs read-only queries by itself (up to 6) to find the answer. Anything that changes data still needs your click.">Explore data</button>
           <span className="spacer" />
-          <select className="ai-live" value={live} onChange={(e) => setLive(e.target.value as LiveMode)} title="How SQL from the answer goes into the editor">
+          <select className="ai-live" value={liveMode} disabled={explore} onChange={(e) => setLive(e.target.value as LiveMode)} title="How SQL from the answer goes into the editor">
             <option value="replace">Type into editor: replace query</option>
             <option value="cursor">Type into editor: at cursor</option>
             <option value="off">Don't type into editor</option>
@@ -299,7 +324,7 @@ export function AiPanel({ engine, getSchema, lastError, editor, chatKey, connect
             ? <button className="btn btn-sm" onClick={stop} title="Stop"><IconStop width={12} height={12} /> Stop</button>
             : <button className="btn btn-sm btn-primary" onClick={() => send(input)} disabled={!input.trim()}>Send</button>}
         </div>
-        <p className="muted small-text ai-note">Sends table and column names and your query to {prov?.label ?? 'the AI provider'}; never row data. Review SQL before running it.</p>
+        <p className="muted small-text ai-note">Sends table and column names and your query to {prov?.label ?? 'the AI provider'}{explore ? ', plus the first rows of queries it runs in Explore mode' : '; never row data'}. Review SQL before running it.</p>
       </div>
     </aside>
   )

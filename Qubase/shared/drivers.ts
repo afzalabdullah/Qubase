@@ -2,7 +2,7 @@
 // Several databases speak another's wire protocol, so they reuse its adapter ("engine").
 
 export type Engine = 'postgres' | 'mysql' | 'sqlite' | 'mssql' | 'oracle' | 'clickhouse' | 'duckdb' | 'libsql' | 'mongodb' | 'redis'
-  | 'snowflake' | 'bigquery' | 'cassandra' | 'dynamodb' | 'trino'
+  | 'snowflake' | 'bigquery' | 'cassandra' | 'dynamodb' | 'trino' | 'elasticsearch'
 
 export type DbKind =
   | 'postgres' | 'cockroach' | 'redshift' | 'timescale' | 'yugabyte'
@@ -13,6 +13,7 @@ export type DbKind =
   | 'clickhouse'
   | 'mongodb' | 'redis'
   | 'snowflake' | 'bigquery' | 'cassandra' | 'dynamodb' | 'trino'
+  | 'supabase' | 'neon' | 'planetscale' | 'elasticsearch' | 'opensearch'
 
 /** SQL databases use the SQL editor; others get their own query language */
 export function queryLanguage(kind: DbKind): 'sql' | 'mongo' | 'redis' {
@@ -60,7 +61,12 @@ export const DRIVERS: DriverInfo[] = [
   { kind: 'bigquery', label: 'BigQuery', engine: 'bigquery', mode: 'cloud', color: '#669df6', abbr: 'Bq', databaseLabel: 'Default dataset' },
   { kind: 'cassandra', label: 'Cassandra', engine: 'cassandra', mode: 'server', color: '#1287b1', abbr: 'Ca', defaultPort: 9042, databaseLabel: 'Keyspace' },
   { kind: 'dynamodb', label: 'DynamoDB', engine: 'dynamodb', mode: 'cloud', color: '#4053d6', abbr: 'Dy' },
-  { kind: 'trino', label: 'Trino / Presto', engine: 'trino', mode: 'server', color: '#dd00a1', abbr: 'Tr', defaultPort: 8080, defaultUser: 'trino', databaseLabel: 'Catalog' }
+  { kind: 'trino', label: 'Trino / Presto', engine: 'trino', mode: 'server', color: '#dd00a1', abbr: 'Tr', defaultPort: 8080, defaultUser: 'trino', databaseLabel: 'Catalog' },
+  { kind: 'supabase', label: 'Supabase', engine: 'postgres', mode: 'server', color: '#3ecf8e', abbr: 'Su', defaultPort: 5432, defaultUser: 'postgres', defaultDatabase: 'postgres', defaultSsl: true },
+  { kind: 'neon', label: 'Neon', engine: 'postgres', mode: 'server', color: '#00e599', abbr: 'Ne', defaultPort: 5432, defaultDatabase: 'neondb', defaultSsl: true },
+  { kind: 'planetscale', label: 'PlanetScale', engine: 'mysql', mode: 'server', color: '#000000', abbr: 'Ps', defaultPort: 3306, defaultSsl: true },
+  { kind: 'elasticsearch', label: 'Elasticsearch', engine: 'elasticsearch', mode: 'server', color: '#00bfb3', abbr: 'Es', defaultPort: 9200, defaultUser: 'elastic', databaseLabel: 'Not used' },
+  { kind: 'opensearch', label: 'OpenSearch', engine: 'elasticsearch', mode: 'server', color: '#005eb8', abbr: 'Os', defaultPort: 9200, defaultUser: 'admin', databaseLabel: 'Not used' }
 ]
 
 export function driverFor(kind: DbKind): DriverInfo {

@@ -1,7 +1,7 @@
 import {
   siAmazondynamodb, siAmazonredshift, siApachecassandra, siClickhouse, siCockroachlabs, siDuckdb,
   siGooglebigquery, siMariadb, siMongodb, siMysql, siOracle, siPostgresql, siRedis, siSnowflake,
-  siSqlite, siTimescale, siTrino, siTurso,
+  siSqlite, siTimescale, siTrino, siTurso, siSupabase, siPlanetscale, siElasticsearch, siOpensearch,
 } from 'simple-icons'
 
 /** Official brand marks from Simple Icons, or a lettered tile in the brand colour when the
@@ -24,6 +24,11 @@ export const DB_ICONS: Record<string, DbIcon> = {
   TiDB: { hex: '#e30c34', abbr: 'Ti' },
   TimescaleDB: si(siTimescale),
   'LibSQL / Turso': si(siTurso),
+  Supabase: si(siSupabase),
+  Neon: { hex: '#00e599', abbr: 'Ne' },
+  PlanetScale: si(siPlanetscale),
+  Elasticsearch: si(siElasticsearch),
+  OpenSearch: si(siOpensearch),
   MongoDB: si(siMongodb),
   Redis: si(siRedis),
   DynamoDB: si(siAmazondynamodb),

@@ -7,7 +7,11 @@ export interface SavedQuery {
   /** Connection kind it was saved from (shown as a hint) */
   engine?: string
   at: number
+  /** Earlier texts, newest first (kept when a query is saved again under the same name) */
+  versions?: { text: string; at: number }[]
 }
+
+const MAX_VERSIONS = 30
 
 const KEY = 'savedQueries'
 
@@ -21,8 +25,11 @@ function write(list: SavedQuery[]) {
 
 /** Save (or replace the query with the same name). */
 export function saveQuery(name: string, text: string, engine?: string): SavedQuery[] {
-  const list = readSavedQueries().filter((q) => q.name.toLowerCase() !== name.toLowerCase())
-  list.unshift({ id: crypto.randomUUID(), name, text, engine, at: Date.now() })
+  const all = readSavedQueries()
+  const old = all.find((q) => q.name.toLowerCase() === name.toLowerCase())
+  const list = all.filter((q) => q !== old)
+  const versions = old ? (old.text === text ? old.versions ?? [] : [{ text: old.text, at: old.at }, ...(old.versions ?? [])].slice(0, MAX_VERSIONS)) : []
+  list.unshift({ id: old?.id ?? crypto.randomUUID(), name, text, engine, at: Date.now(), versions })
   write(list)
   return list
 }

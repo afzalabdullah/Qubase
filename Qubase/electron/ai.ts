@@ -96,13 +96,13 @@ function prompt(req: AiRequest) {
 
 type Conf = ReturnType<typeof settingsFor>
 
-async function askAnthropic(c: Conf, user: string): Promise<string> {
+async function askAnthropic(c: Conf, user: string, opts: { system?: string; maxTokens?: number } = {}): Promise<string> {
   const client = new Anthropic({ apiKey: c.key })
   try {
     const res = await client.beta.messages.create({
       model: c.model || DEFAULT_MODEL,
-      max_tokens: 16000,
-      system: SYSTEM,
+      max_tokens: opts.maxTokens ?? 16000,
+      system: opts.system ?? SYSTEM,
       messages: [{ role: 'user', content: user }],
       // If a safety check declines the request, the API retries it on a fallback model
       betas: ['server-side-fallback-2026-07-01'],
@@ -154,11 +154,12 @@ async function openAiFetch(c: Conf, pathPart: string, body?: unknown) {
   return json
 }
 
-async function askOpenAi(c: Conf, user: string): Promise<string> {
+async function askOpenAi(c: Conf, user: string, opts: { system?: string; maxTokens?: number } = {}): Promise<string> {
   if (!c.model) throw new Error(`Choose a model for ${aiProvider(c.provider).label} in Settings → AI assistant.`)
   const json = await openAiFetch(c, '/chat/completions', {
     model: c.model,
-    messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: user }]
+    messages: [{ role: 'system', content: opts.system ?? SYSTEM }, { role: 'user', content: user }],
+    ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {})
   })
   const choice = json?.choices?.[0]
   const content = choice?.message?.content
@@ -176,6 +177,27 @@ export async function ask(req: AiRequest): Promise<string> {
   const c = settingsFor(read().provider ?? 'anthropic')
   ensureUsable(c)
   return c.provider === 'anthropic' ? askAnthropic(c, prompt(req)) : askOpenAi(c, prompt(req))
+}
+
+const COMPLETE_SYSTEM = 'You complete database queries in a code editor, like an autocomplete. Reply with ONLY the text to insert at the cursor: no explanation, no code fences, no repeating text that is already before the cursor. Keep it short: finish the current statement or clause, at most 4 lines. If nothing useful fits, reply with nothing.'
+
+/** Inline suggestion: the text to insert at the cursor (may be empty) */
+export async function complete(req: { engine: string; schema: string; before: string; after: string }): Promise<string> {
+  const c = settingsFor(read().provider ?? 'anthropic')
+  ensureUsable(c)
+  const user = [
+    `Database: ${DIALECT[req.engine] ?? req.engine}`,
+    `Schema (table: columns):
+${req.schema.slice(0, 20000) || '(not loaded)'}`,
+    `Text before the cursor:
+${req.before.slice(-4000)}`,
+    `Text after the cursor:
+${req.after.slice(0, 1000) || '(end of editor)'}`,
+    'Text to insert at the cursor:'
+  ].join('\n\n')
+  const ask = c.provider === 'anthropic' ? askAnthropic : askOpenAi
+  const out = await ask(c, user, { system: COMPLETE_SYSTEM, maxTokens: 200 }).catch((e) => { if (/no answer/i.test(String(e))) return ''; throw e })
+  return out.replace(/^```[a-zA-Z]*\n?|\n?```\s*$/g, '').replace(/\n*\(Answer cut short\)$/, '').trimEnd()
 }
 
 /** Settings → Test: one tiny request with the values typed in (key may be empty = use the saved one) */

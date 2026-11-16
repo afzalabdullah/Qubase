@@ -1,8 +1,16 @@
+import { splitStatements } from './split'
 import { DuckDBInstance, DuckDBConnection } from '@duckdb/node-api'
 import { BaseClient, DefinitionTarget, RunResult } from './base'
 import type { ColumnInfo, ConnectionConfig, DbObject, ForeignKeyInfo, IndexInfo, TableInfo } from '../../shared/types'
 
 export class DuckDbClient extends BaseClient {
+
+  /** Run each statement of a script on its own (the driver accepts only one at a time) */
+  protected async runMulti(sql: string): Promise<RunResult[]> {
+    const out: RunResult[] = []
+    for (const s of splitStatements(sql)) out.push(await this.run(s))
+    return out
+  }
   protected readonly engine = 'duckdb'
   private instance?: DuckDBInstance
   private conn?: DuckDBConnection

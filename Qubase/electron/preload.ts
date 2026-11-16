@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { DbApi } from '../shared/types'
+import type { DbApi, UpdateStatus } from '../shared/types'
 
 const api: DbApi = {
   connect: (config) => ipcRenderer.invoke('db:connect', config),
@@ -24,6 +24,7 @@ const api: DbApi = {
   transaction: (id, action) => ipcRenderer.invoke('db:transaction', id, action),
   readImportFile: (file) => ipcRenderer.invoke('import:read', file),
   aiAsk: (req) => ipcRenderer.invoke('ai:ask', req),
+  aiComplete: (req) => ipcRenderer.invoke('ai:complete', req),
   aiHasKey: () => ipcRenderer.invoke('ai:hasKey'),
   aiSetKey: (key, model) => ipcRenderer.invoke('ai:setKey', key, model),
   aiGetConfig: () => ipcRenderer.invoke('ai:getConfig'),
@@ -56,6 +57,10 @@ const api: DbApi = {
   onSchedulesChanged: (fn) => { const f = () => fn(); ipcRenderer.on('schedules:changed', f); return () => { ipcRenderer.removeListener('schedules:changed', f) } },
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   appVersion: () => ipcRenderer.invoke('app:version'),
+  updateCheck: (url) => ipcRenderer.invoke('update:check', url),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (fn) => { const f = (_e: unknown, s: UpdateStatus) => fn(s); ipcRenderer.on('update:status', f); return () => { ipcRenderer.removeListener('update:status', f) } },
   checkForUpdate: (url) => ipcRenderer.invoke('app:checkUpdate', url),
   getLicence: () => ipcRenderer.invoke('licence:get'),
   setLicence: (key) => ipcRenderer.invoke('licence:set', key),

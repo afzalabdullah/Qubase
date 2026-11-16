@@ -1,8 +1,17 @@
+import type { RunResult } from './base'
+import { splitStatements } from './split'
 import { BaseClient, DefinitionTarget } from './base'
 import type { ColumnInfo, DbObject, ForeignKeyInfo, IndexInfo, TableInfo } from '../../shared/types'
 
 /** Catalog queries shared by SQLite and LibSQL / Turso (same SQL, different drivers). */
 export abstract class SqliteFamilyClient extends BaseClient {
+
+  /** Run each statement of a script on its own (the driver accepts only one at a time) */
+  protected async runMulti(sql: string): Promise<RunResult[]> {
+    const out: RunResult[] = []
+    for (const s of splitStatements(sql)) out.push(await this.run(s))
+    return out
+  }
   protected readonly engine: string = 'sqlite'
 
   protected quoteIdent(name: string) { return `"${name.replace(/"/g, '""')}"` }

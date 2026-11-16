@@ -12,6 +12,8 @@ import * as ai from './ai'
 import { sampleDatabase } from './sample'
 import { checkForUpdate, clearLicence, getLicence, readTeam, setLicence, shareToTeam } from './product'
 import { deleteSchedule, listSchedules, runSchedule, saveSchedule, startScheduler } from './scheduler'
+import { installUpdater } from './updater'
+import { cliArgs, runCli } from './cli'
 import { driverFor } from '../shared/drivers'
 import type { TeamData, Schedule, AiRequest, ConnectionConfig, PageOptions, RowChange, RowUpdate, SavedConnection, TableInfo, TxAction } from '../shared/types'
 
@@ -185,6 +187,7 @@ ipcMain.handle('db:transaction', async (_e, id: string, action: TxAction) => {
 })
 ipcMain.handle('import:read', (_e, file: string) => readImportFile(file))
 ipcMain.handle('ai:ask', (_e, req: AiRequest) => ai.ask(req))
+ipcMain.handle('ai:complete', (_e, req) => ai.complete(req))
 ipcMain.handle('ai:hasKey', () => ai.hasKey())
 ipcMain.handle('ai:setKey', (_e, key: string, model: string) => ai.setKey(key, model))
 ipcMain.handle('ai:getConfig', () => ai.getConfig())
@@ -355,7 +358,12 @@ ipcMain.handle('file:openText', async (e, o: { filter: string; ext: string }) =>
   return { path: r.filePaths[0], content: await fs.promises.readFile(r.filePaths[0], 'utf8') }
 })
 
-app.whenReady().then(() => {
+// Command line (--run, --list-connections, --help): run without a window and exit with the result code
+const cli = cliArgs(process.argv)
+
+app.whenReady().then(async () => {
+  if (cli) { app.exit(await runCli(cli)); return }
+  installUpdater()
   // No built-in menu: its hidden accelerators (Ctrl+R reload, Ctrl+W close window) clashed with the app's shortcuts
   Menu.setApplicationMenu(null)
   createWindow()
@@ -366,6 +374,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', async () => {
+  if (cli) return
   await Promise.allSettled([...clients.values()].map((c) => c.disconnect()))
   if (process.platform !== 'darwin') app.quit()
 })

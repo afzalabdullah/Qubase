@@ -4,6 +4,7 @@ import type { ColumnInfo, ExportFormat, QueryResult } from '../../shared/types'
 import { ResultGrid, Sort } from './ResultGrid'
 import { JsonPanel } from './JsonPanel'
 import { ChartView } from './ChartView'
+import { MapView } from './MapView'
 import { PivotView } from './PivotView'
 import { ResultDiff, getPinned, setPinned } from './ResultDiff'
 import { IconBraces, IconChart, IconCompare, IconCopy, IconDownload, IconSearch } from './Icons'
@@ -46,7 +47,7 @@ function compare(a: unknown, b: unknown) {
 
 /** Result grid + toolbar (filter, export, JSON panel toggle) + optional JSON side panel. */
 export function ResultView({ result, name, columnInfo, pending = {}, onEdit, onStatus, rowClass, onSelectionChange, resetKey, focusRow, tableName, serverSort, onServerSort }: Props) {
-  const [mode, setMode] = useState<'grid' | 'chart' | 'pivot'>('grid')
+  const [mode, setMode] = useState<'grid' | 'chart' | 'pivot' | 'map'>('grid')
   const chart = mode === 'chart'
   const [copyOpen, setCopyOpen] = useState(false)
   const [showTotals, setShowTotals] = useState(() => readPref('totals', true))
@@ -174,6 +175,7 @@ export function ResultView({ result, name, columnInfo, pending = {}, onEdit, onS
           )}
         </div>
         <button className={`btn btn-sm ${mode === 'pivot' ? 'btn-on' : ''}`} onClick={() => setMode((m) => (m === 'pivot' ? 'grid' : 'pivot'))} title="Pivot table: group rows and columns">Pivot</button>
+        <button className={`btn btn-sm ${mode === 'map' ? 'btn-on' : ''}`} onClick={() => setMode((m) => (m === 'map' ? 'grid' : 'map'))} title="Draw geographic columns (GeoJSON, WKT or lat / lng) on a map">Map</button>
         <button className={`btn btn-sm ${chart ? 'btn-on' : ''}`} onClick={() => setMode((m) => (m === 'chart' ? 'grid' : 'chart'))} title="Chart these rows"><IconChart width={14} height={14} /> Chart</button>
         <button className={`btn btn-sm ${showTotals ? 'btn-on' : ''}`} onClick={() => setShowTotals((t) => !t)} title="Sum, average, min and max of number columns (selected rows, or all visible rows)">Σ</button>
         <button className="btn btn-sm" title={hasPinned ? `Compare with the pinned result (${getPinned()?.name})` : 'Pin this result, run another query, then compare'}
@@ -186,6 +188,7 @@ export function ResultView({ result, name, columnInfo, pending = {}, onEdit, onS
       </div>
       {chart && <ChartView result={result} order={order} />}
       {mode === 'pivot' && <PivotView result={result} order={order} />}
+      {mode === 'map' && <MapView result={result} order={order} />}
       <div className="result-body" style={mode !== 'grid' ? { display: 'none' } : undefined}>
         <ResultGrid
           result={result}

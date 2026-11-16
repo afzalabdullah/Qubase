@@ -27,11 +27,11 @@ export type SettingsSection = typeof SETTINGS_SECTIONS[number][0]
 /** Which settings each section owns, for its Reset button */
 const SECTION_KEYS: Partial<Record<SettingsSection, (keyof Settings)[]>> = {
   appearance: ['theme', 'accent', 'accentCustom', 'railColor', 'sidebarColor', 'statusColor', 'uiFont', 'uiSize', 'monoFont', 'fontSize', 'editorTheme', 'radius', 'density'],
-  editor: ['runCurrentStatement', 'queryParams', 'restoreTabs'],
+  editor: ['runCurrentStatement', 'queryParams', 'restoreTabs', 'aiInline'],
   formatting: ['keywordCase', 'indentWidth', 'snippets'],
   shortcuts: ['shortcuts'],
   results: ['rowLimit', 'pageSize'],
-  safety: ['blockNoWhere', 'confirmProduction'],
+  safety: ['blockNoWhere', 'confirmProduction', 'maskData'],
   ai: ['aiModel'],
   team: ['teamFolder'],
 }
@@ -175,9 +175,8 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
   const checkUpdate = async () => {
     setUpdateMsg('Checking…')
     try {
-      const u = await window.db.checkForUpdate(s.updateUrl)
-      setUpdateMsg(u.available ? `Version ${u.latest} is available.` : `You have the latest version (${u.current}).`)
-      if (u.available && window.confirm(`Qubase ${u.latest} is available (you have ${u.current}). Open the download?`)) window.open(u.download)
+      const u = await window.db.updateCheck(s.updateUrl || undefined)
+      setUpdateMsg(u.state === 'available' ? `Version ${u.latest} is available; see the notice in the corner to download it.` : u.state === 'error' ? (u.error ?? 'Update check failed') : `You have the latest version (${u.current}).`)
     } catch (e) { setUpdateMsg(errMsg(e)) }
   }
   const activate = async () => { const r = await window.db.setLicence(licenceKey); setLicence(r); if (r.valid) setLicenceKey('') }
@@ -408,6 +407,9 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
                 <option value={2}>2 spaces</option><option value={4}>4 spaces</option>
               </select>
             </Row>
+            <Row label="AI suggestions while typing" help="After a short pause, the AI suggests how to finish the line as grey text: Tab accepts, Esc dismisses. Sends the query and table names to your AI provider each time, so it uses your AI credits.">
+              <Toggle checked={s.aiInline} onChange={(v) => set({ aiInline: v })} label="AI suggestions" />
+            </Row>
             <Row label="Snippets while typing" help={<>Type <code>sel</code> and press Enter; Tab jumps between the blanks.</>}>
               <Toggle checked={s.snippets} onChange={(v) => set({ snippets: v })} label="Snippets" />
             </Row>
@@ -496,6 +498,7 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
 
           {Section({ id: 'safety', children: <>
             <Row label="Ask before UPDATE or DELETE without WHERE"><Toggle checked={s.blockNoWhere} onChange={(v) => set({ blockNoWhere: v })} label="Block no-WHERE" /></Row>
+            <Row label="Mask personal data" help="Hides emails, phone and card numbers and similar columns in the results grid, for screen sharing. Editing a cell shows its real value."><Toggle checked={s.maskData} onChange={(v) => set({ maskData: v })} label="Mask data" /></Row>
             <Row label="Ask before every change on Production connections" help="Mark a connection as Production on the connection screen."><Toggle checked={s.confirmProduction} onChange={(v) => set({ confirmProduction: v })} label="Confirm production" /></Row>
           </> })}
 
@@ -570,6 +573,13 @@ export function SettingsModal({ onClose, onSaved, section }: { onClose: () => vo
 
           {Section({ id: 'about', children: <>
             <Row label="Version"><strong>{version || '…'}</strong></Row>
+            <Row label="Updates" help="Qubase checks for new versions on start-up and asks before downloading. Leave the address empty to use GitHub releases.">
+              <div className="btn-row">
+                <input className="input" placeholder="https://… (optional)" value={s.updateUrl} onChange={(e) => set({ updateUrl: e.target.value.trim() })} />
+                <button className="btn btn-sm" onClick={checkUpdate}>Check now</button>
+              </div>
+            </Row>
+            {updateMsg && <p className="small-text pad">{updateMsg}</p>}
             <Row label="Log file" help="Errors and crashes are written to a local log file. Nothing is sent anywhere.">
               <button className="btn btn-sm" onClick={() => window.db.openLogFolder()}>Open log folder</button>
             </Row>

@@ -175,6 +175,7 @@ export interface Schedule {
   history?: ScheduleRun[]
 }
 
+export interface UpdateStatus { state: 'idle' | 'checking' | 'available' | 'none' | 'downloading' | 'ready' | 'error'; current: string; latest?: string; percent?: number; notes?: string; error?: string }
 export interface UpdateInfo { current: string; latest: string; available: boolean; download: string }
 export interface LicenceInfo { valid: boolean; error?: string; name?: string; email?: string; plan?: string; seats?: number; expires?: string }
 /** Shared through the team folder */
@@ -265,6 +266,8 @@ export interface DbApi {
   readImportFile(file: string): Promise<ImportData>
   /** AI assistant (the API key stays in the main process) */
   aiAsk(req: AiRequest): Promise<string>
+  /** Inline suggestion for the editor: text to insert at the cursor ('' when nothing fits) */
+  aiComplete(req: { engine: string; schema: string; before: string; after: string }): Promise<string>
   aiHasKey(): Promise<boolean>
   aiSetKey(key: string, model: string): Promise<void>
   /** Chosen AI provider and its settings (keys are never returned, only whether one is saved) */
@@ -308,6 +311,10 @@ export interface DbApi {
   onSchedulesChanged(fn: () => void): () => void
   pickFolder(): Promise<string | null>
   appVersion(): Promise<string>
+  updateCheck(url?: string): Promise<UpdateStatus>
+  updateDownload(): Promise<UpdateStatus>
+  updateInstall(): Promise<void>
+  onUpdateStatus(fn: (s: UpdateStatus) => void): () => void
   checkForUpdate(url: string): Promise<UpdateInfo>
   getLicence(): Promise<LicenceInfo>
   setLicence(key: string): Promise<LicenceInfo>

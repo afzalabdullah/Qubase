@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { sql, MSSQL, PostgreSQL, MySQL, SQLite, PLSQL, StandardSQL, SQLNamespace, SQLDialect } from '@codemirror/lang-sql'
 import { javascript } from '@codemirror/lang-javascript'
+import { ghostText } from '../ghostText'
 import { keymap, EditorView, Decoration, DecorationSet } from '@codemirror/view'
 import { StateEffect, StateField } from '@codemirror/state'
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
@@ -499,7 +500,16 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
     return lines.join('\n')
   }
 
+  // Schema text for inline AI suggestions, reused for a minute so typing doesn't rebuild it every time
+  const schemaCache = useRef<{ at: number; text: Promise<string> } | null>(null)
+  const ghost = useMemo(() => ghostText(async (before, after) => {
+    if (!schemaCache.current || Date.now() - schemaCache.current.at > 60_000) schemaCache.current = { at: Date.now(), text: schemaText().catch(() => '') }
+    return window.db.aiComplete({ engine: dialect, schema: await schemaCache.current.text, before, after })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [dialect, connId])
+
   const extensions = useMemo(() => [
+    ...(settings.aiInline ? [ghost] : []),
     ...(isSql ? (() => {
       const lang = sql({ dialect: DIALECTS[dialect] ?? StandardSQL, upperCaseKeywords: true, schema: completionSchema.schema, defaultSchema: completionSchema.defaultSchema })
       return [lang, lang.language.data.of({ autocomplete: columnSource }), lang.language.data.of({ autocomplete: smart.join }), lang.language.data.of({ autocomplete: smart.value }), ...(settings.snippets ? [lang.language.data.of({ autocomplete: snippetSource })] : [])]
@@ -517,7 +527,7 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
     ].filter((k) => k.key)),
     EditorView.theme({ '&': { fontSize: 'var(--editor-font, 13px)' } })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [runCurrent, language, text, completionSchema, dialect, columnSource, settings, file, smart])
+  ], [runCurrent, language, text, completionSchema, dialect, columnSource, settings, file, smart, ghost])
 
   const startDrag = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -597,6 +607,13 @@ export function QueryTab({ connId, database, dialect, dark, language, title, onS
                       <button onClick={() => { setText(q.text); setMenu('') }} title={q.text}>
                         <span className="hist-text"><strong>{q.name}</strong> <span className="muted">{q.text.replace(/\s+/g, ' ').slice(0, 60)}</span></span>
                       </button>
+                      {!!q.versions?.length && (
+                        <select className="saved-versions" value="" title={`${q.versions.length} earlier versions: pick one to open it in the editor`}
+                          onChange={(e) => { const v = q.versions![Number(e.target.value)]; if (v) { setText(v.text); setMenu(''); onStatus(`Opened the version of “${q.name}” from ${new Date(v.at).toLocaleString()}; save it again to restore it`) } }}>
+                          <option value="" disabled>{q.versions.length} versions</option>
+                          {q.versions.map((v, k) => <option key={k} value={k}>{new Date(v.at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })} · {v.text.replace(/\s+/g, ' ').slice(0, 40)}</option>)}
+                        </select>
+                      )}
                       <button className="icon-btn" title="Delete" onClick={() => setSavedList(deleteSavedQuery(q.id))}><IconTrash width={13} height={13} /></button>
                     </div>
                   ))}

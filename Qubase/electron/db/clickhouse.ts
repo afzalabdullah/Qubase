@@ -1,9 +1,17 @@
+import { splitStatements } from './split'
 import { createClient, ClickHouseClient as CH } from '@clickhouse/client'
 import { BaseClient, DefinitionTarget, RunResult } from './base'
 import type { ColumnInfo, ConnectionConfig, TableInfo, DbObject } from '../../shared/types'
 
 /** ClickHouse over HTTP. Read-only in the grid: ClickHouse has no row-level UPDATE. */
 export class ClickHouseClient extends BaseClient {
+
+  /** Run each statement of a script on its own (the driver accepts only one at a time) */
+  protected async runMulti(sql: string): Promise<RunResult[]> {
+    const out: RunResult[] = []
+    for (const s of splitStatements(sql)) out.push(await this.run(s))
+    return out
+  }
   readonly canEdit = false
   private client?: CH
 

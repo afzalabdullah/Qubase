@@ -10,7 +10,7 @@ import {
 } from './Icons'
 import { errMsg } from '../util'
 
-export type TableView = 'data' | 'structure' | 'script'
+export type TableView = 'data' | 'structure' | 'script' | 'profile'
 
 interface Props {
   connId: string

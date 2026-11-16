@@ -20,6 +20,7 @@ import { Notebook } from './components/Notebook'
 import { QueryBuilder } from './components/QueryBuilder'
 import { FindInDb } from './components/FindInDb'
 import { Schedules } from './components/Schedules'
+import { Migrations } from './components/Migrations'
 import { IconBook, IconBuilder, IconCode, IconCompare, IconDiagram, IconGear, IconMoon, IconPlus, IconSearch, IconServer, IconSidebar, IconKeyboard, IconClock, IconDatabase, IconSun, IconTable, IconX, IconUsers, IconJobs, IconBackup, IconActivity, IconRows, IconUpload, IconChart, IconLayers, IconLayoutDashboard, IconCompass } from './components/Icons'
 import { Toaster, toast } from 'sonner'
 import { driverFor, queryLanguage } from '../shared/drivers'
@@ -41,6 +42,7 @@ type Tab =
   | { key: string; kind: 'builder'; title: string }
   | { key: string; kind: 'search'; title: string }
   | { key: string; kind: 'schedules'; title: string }
+  | { key: string; kind: 'migrations'; title: string }
   | { key: string; kind: 'dashboard'; title: string }
 
 // Send uncaught UI errors to the local log file
@@ -167,6 +169,19 @@ export function App() {
   const engine = cfg ? driverFor(cfg.kind).engine : ''
   const connValue = useMemo(() => session && { conn: session.conn, engine, connId: session.id }, [session, engine])
 
+  // Auto-update: a quiet check after start-up and every 6 hours; the user decides to download and restart
+  useEffect(() => {
+    const off = window.db.onUpdateStatus((u) => {
+      if (u.state === 'available') toast.info(`Qubase ${u.latest} is available`, { id: 'update', duration: Infinity, description: `You have ${u.current}.`, action: { label: 'Download', onClick: () => { window.db.updateDownload() } } })
+      else if (u.state === 'downloading') toast.loading(`Downloading update… ${u.percent ?? 0}%`, { id: 'update', duration: Infinity })
+      else if (u.state === 'ready') toast.success(`Qubase ${u.latest} is ready`, { id: 'update', duration: Infinity, description: 'Restart to finish installing.', action: { label: 'Restart', onClick: () => { window.db.updateInstall() } } })
+      else if (u.state === 'error') toast.dismiss('update')
+    })
+    const run = () => { window.db.updateCheck(readSettings().updateUrl || undefined).catch(() => {}) }
+    const t = setTimeout(run, 8000), iv = setInterval(run, 6 * 60 * 60 * 1000)
+    return () => { off(); clearTimeout(t); clearInterval(iv) }
+  }, [])
+
   // First time on the main screen: show the guided tour once
   const sessionId = session?.id
   useEffect(() => {
@@ -280,6 +295,7 @@ export function App() {
   const openNotebook = () => { tabCounter += 1; openTab({ key: `nb${tabCounter}`, kind: 'notebook', title: `Notebook ${tabCounter}` }) }
   const openBuilder = () => { tabCounter += 1; openTab({ key: `qb${tabCounter}`, kind: 'builder', title: 'Query builder' }) }
   const openSearch = () => openTab({ key: 'search', kind: 'search', title: 'Find in database' })
+  const openMigrations = () => openTab({ key: 'migrations', kind: 'migrations', title: 'Migrations' })
   const openSchedules = () => openTab({ key: 'schedules', kind: 'schedules', title: 'Schedules' })
   const openDashboard = () => openTab({ key: 'dashboard', kind: 'dashboard', title: 'Dashboard' })
   /** Open tabs as plain data (query text included), for a workspace */
@@ -367,6 +383,7 @@ export function App() {
       { id: 'forceclose', label: 'Force close all tabs (discard unsaved changes)', run: () => requestClose(tabsRef.current.map((t) => t.key), { force: true, includePinned: true }) },
       { id: 'builder', label: 'Visual query builder', hint: hint('queryBuilder'), run: openBuilder },
       { id: 'datacompare', label: 'Data compare (rows between two tables)', hint: hint('dataCompare'), run: openDataCompare },
+      { id: 'migrations', label: 'Migrations (applied database migrations)', run: openMigrations },
       { id: 'search', label: 'Find in database (search every table)', hint: hint('findInDb'), run: openSearch }
     ] : []),
     ...(sqlLike && session.canEdit ? [{ id: 'new-table', label: 'New table', run: newTable }, { id: 'import-new', label: 'Import a file into a new table (CSV, Excel, JSON)', run: () => setImportNew(true) }] : []),
@@ -420,6 +437,7 @@ export function App() {
                 {item('New notebook', <IconBook />, kind === 'notebook', openNotebook, 'newNotebook', sqlLike)}
                 {item('Data compare', <IconCompare />, kind === 'datacompare' || kind === 'compare', openDataCompare, 'dataCompare', sqlLike)}
                 {item('ER diagram', <IconDiagram />, kind === 'er', openEr, 'erDiagram', sqlLike)}
+                {item('Migrations', <IconLayers />, kind === 'migrations', openMigrations, undefined, sqlLike)}
                 {item('Scheduled queries', <IconClock />, kind === 'schedules', openSchedules, 'schedules')}
                 {item('Dashboard', <IconLayoutDashboard />, kind === 'dashboard', openDashboard)}
                 {item('Workspaces', <IconLayers />, wsOpen, () => setWsOpen(true))}
@@ -531,6 +549,7 @@ export function App() {
                 {t.kind === 'datacompare' && <DataCompare dark={dark} onStatus={statusFor(t.key)} />}
                 {t.kind === 'notebook' && <Notebook connId={session.id} dark={dark} title={t.title} onTitle={renameTab(t.key)} onStatus={statusFor(t.key)} onRunningChange={runningFor(t.key)} />}
                 {t.kind === 'search' && <FindInDb onOpenTable={(tb, v, w) => openTable(tb, v as TableView, w)} onStatus={statusFor(t.key)} />}
+                {t.kind === 'migrations' && <Migrations onStatus={statusFor(t.key)} />}
                 {t.kind === 'schedules' && <Schedules dark={dark} onStatus={statusFor(t.key)} />}
                 {t.kind === 'dashboard' && <Dashboard onOpenQuery={openQuery} onStatus={statusFor(t.key)} />}
                 {t.kind === 'builder' && <QueryBuilder dark={dark} onOpenQuery={openQuery} onStatus={statusFor(t.key)} />}
