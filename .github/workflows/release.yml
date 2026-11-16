@@ -4,6 +4,14 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Re-run one platform for the version in package.json (e.g. after a failed build), uploading to its release
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Which installers to build
+        type: choice
+        options: [all, windows, macos, linux]
+        default: all
 
 permissions:
   contents: write
@@ -15,12 +23,16 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            name: windows
             target: --win --x64
           - os: macos-latest
+            name: macos
             target: --mac
           - os: ubuntu-latest
+            name: linux
             target: --linux
     runs-on: ${{ matrix.os }}
+    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == matrix.name
     defaults:
       run:
         working-directory: Qubase
@@ -35,9 +47,12 @@ jobs:
       - run: npm test
       - run: npm run build
       # Code signing is optional: add CSC_LINK / CSC_KEY_PASSWORD (and Apple notarisation secrets) as repository secrets to sign.
-      - run: npx electron-builder ${{ matrix.target }} --publish always
+      # An empty CSC_LINK is read as a file path (and fails on macOS), so it is only set when the secret exists
+      - shell: bash
+        run: |
+          if [ -z "$SIGN_LINK" ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false; else export CSC_LINK="$SIGN_LINK" CSC_KEY_PASSWORD="$SIGN_PASSWORD"; fi
+          npx electron-builder ${{ matrix.target }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          SIGN_LINK: ${{ secrets.CSC_LINK }}
+          SIGN_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
